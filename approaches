@@ -1,0 +1,19 @@
+Approach 1
+1. Brute force check similarity
+
+Approach 2
+1. Satellite image captured
+2. Find GPS coordinates of image
+3. Combine images using GPS coords?
+
+Approach 3
+Something related to Hadoop MapReduce
+
+Approach 4
+Feature Detection using SIFT, SURF, FAST, ORB
+SIFT
+Feature Matching using Brute Force Matching and FLANN
+BFM
+Transformation Estimation - Use RANSAC to estimate homography
+RANSAC
+Image Warping - Apply transformation matrix to all pixels in images other than reference image. Interpolation methods like nearest neighbour, bilinear or bicubic interpolation
