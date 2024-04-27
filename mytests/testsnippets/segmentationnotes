@@ -1,0 +1,20 @@
+Using U-Net
+Same model ofc
+Change dataset? --> YES
+Learn how to
+	
+U-Net 
+1. Encoder
+Extracts information regarding image
+2. Decoder
+Localizes Multiple Entries
+3. Skip connections
+4. Up sampling
+
+Layer composition:
+1. Input image
+2. Encoder extracts information
+3. Decoder localizes information
+Layer ends
+4. Upsampled to remedy low level pixel-info loss
+5. Skip connection added to upsample to reduce info loss
