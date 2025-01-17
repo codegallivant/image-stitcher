@@ -1,6 +1,6 @@
 project_dir: "/mnt/d/image-stitcher/"
 input_dir: "/mnt/d/datasets/isdc_test_drone_datasets/d1"
-stitch_dir: /mnt/d/image-stitched/stitched/stitched
+stitch_dir: /mnt/d/image-stitcher/stitched/stitched
 input_limit: 50 # Set to None if all input images should be considered
 
 mode: 0 # 0: affine, 1: perspective
