@@ -1,4 +1,0 @@
-Point 1: (28, 49)
-filename: roi_65.jpg
-Point 2: (7, 162)
-filename: roi_23.jpg
