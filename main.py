@@ -61,7 +61,8 @@ files = [os.path.join(INPUT_DIR, file) for file in files]
 print(INPUT_DIR)
 
 files = [file for file in files if file[-4:]==".png"]
-files = files[:INPUT_LIMIT]
+if INPUT_LIMIT != None:
+    files = files[:INPUT_LIMIT]
 print(files)
 
 files = [p[1] for p in enumerate(files) if p[0]%5==0]
