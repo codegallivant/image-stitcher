@@ -9,21 +9,30 @@ import glob
 from ast import literal_eval
 import time
 import gc
+import yaml
 
 start_time = time.time()
 
-MIN_MATCH_COUNT = 20 # For BFM
-RATIO = 0.6
+modes = ["affine", "perspective"]
 
-PROJECT_DIR = "/mnt/d/image-stitcher/new"
-INPUT_DIR = "/mnt/d/datasets/isdc_test_drone_datasets/d1"
-STITCH_DIR = os.path.join(PROJECT_DIR, f"stitched/stitched")
+# Read the configuration file
+with open("config.yaml", 'r') as ymlfile:
+    cfg = yaml.safe_load(ymlfile)
+    PROJECT_DIR = cfg["project_dir"]
+    INPUT_DIR = cfg["input_dir"]
+    STITCH_DIR = cfg["stitch_dir"]
+    MIN_MATCH_COUNT = cfg["min_match_threshold"]
+    RATIO = cfg["lowes_ratio"]
+    MODE = modes[cfg["mode"]]
+    CONSECUTIVE_RANGE = cfg["consecutive_range"]
+    INPUT_LIMIT = cfg["input_limit"]
 
 
 def load_image(filepath):
     image = cv2.imread(filepath)
     image = image[:,65:]    
     return image
+
 
 class LazyList:
     def __init__(self, function, length):
@@ -46,17 +55,13 @@ for dir in dirs:
     if not os.path.exists(dir):
         os.makedirs(dir)
 
-# FIND_ROUTE = True # Only implemented for affine mode
-
-modes = ["affine", "perspective"]
-MODE =  modes[0]
 
 files = os.listdir(INPUT_DIR)
 files = [os.path.join(INPUT_DIR, file) for file in files]
 print(INPUT_DIR)
 
 files = [file for file in files if file[-4:]==".png"]
-# files = files[:50]
+files = files[:INPUT_LIMIT]
 print(files)
 
 files = [p[1] for p in enumerate(files) if p[0]%5==0]
@@ -180,8 +185,9 @@ for i in range(0, len(images)):
         # Remove if related images not consecutive
         if j==i:
             continue
-        elif abs(j-i)>2:
-            continue
+        if CONSECUTIVE_RANGE != None:
+            if abs(j-i)>CONSECUTIVE_RANGE:
+                continue
         
         
         matches = bf.knnMatch(des[i],des[j],k=2)
