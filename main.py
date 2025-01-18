@@ -10,14 +10,53 @@ from ast import literal_eval
 import time
 import gc
 import yaml
+import logging
+import sys
+
 
 start_time = time.time()
 
 algorithms = ["sift", "orb", "akaze", "surf"]
 matchers = ["bf", "flann"]
 modes = ["affine", "perspective"]
+loglevels = [logging.DEBUG, logging.INFO, logging.WARNING]
+
+_logger = logging.getLogger('root')
+FORMAT = "[%(filename)s:%(lineno)s - %(funcName)s] %(message)s"
+logging.basicConfig(format=FORMAT)
+_logger.setLevel(logging.DEBUG)
+
+
+class LogWrapper():
+
+    def __init__(self, logger):
+        self.logger = logger
+
+    def info(self, *args, sep=' '):
+        self.logger.info(sep.join("{}".format(a) for a in args))
+
+    def debug(self, *args, sep=' '):
+        self.logger.debug(sep.join("{}".format(a) for a in args))
+
+    def warning(self, *args, sep=' '):
+        self.logger.warning(sep.join("{}".format(a) for a in args))
+
+    def error(self, *args, sep=' '):
+        self.logger.error(sep.join("{}".format(a) for a in args))
+
+    def critical(self, *args, sep=' '):
+        self.logger.critical(sep.join("{}".format(a) for a in args))
+
+    def exception(self, *args, sep=' '):
+        self.logger.exception(sep.join("{}".format(a) for a in args))
+
+    def log(self, *args, sep=' '):
+        self.logger.log(sep.join("{}".format(a) for a in args))
+
+logger = LogWrapper(_logger)
 
 # Read the configuration file
+logging.info("Reading configuration file")
 with open("config.yaml", 'r') as ymlfile:
     cfg = yaml.safe_load(ymlfile)
     PROJECT_DIR = cfg["project_dir"]
@@ -34,6 +73,9 @@ with open("config.yaml", 'r') as ymlfile:
         RESIZE = None
     else:
         RESIZE = [int(x) for x in cfg["resize"].split('x')]
+    LOGLEVEL = loglevels[int(cfg["loglevel"])]
+
+logger.logger.setLevel(LOGLEVEL)
 
 def load_image(filepath):
     image = cv2.imread(filepath)
@@ -76,7 +118,7 @@ for dir in dirs:
 
 files = os.listdir(INPUT_DIR)
 files = [os.path.join(INPUT_DIR, file) for file in files]
-print(INPUT_DIR)
+logger.info("Input directory:", INPUT_DIR)
 
 files = [file for file in files if file[-4:]==".png" or file[-4:]==".jpg"]
 
@@ -94,18 +136,18 @@ files = sorted(files, key=lambda x: (sort_key(x, 1), sort_key(x, 2), sort_key(x,
 if INPUT_LIMIT != None:
     files = files[:INPUT_LIMIT]
 
-print(files)
+logger.debug(files)
 
 images = LazyList(lambda index: load_image(files[index]), len(files))
 
 for i in range(0, len(files)):
-    print("Displaying", files[i])
+    logger.debug("Displaying", files[i])
     cv2.imshow('a', images[i])
     cv2.waitKey(1)
 
 cv2.destroyAllWindows()
 
-print(len(images), "images displayed")
+logger.info(len(images), "images displayed")
 
 if ALGORITHM == 'sift':
     sift = cv2.SIFT_create()
@@ -219,15 +261,15 @@ for i in range(0, len(images)):
                     good.append([match[0]])
         
         if len(good)>MIN_MATCH_COUNT:
-            print( "{}->{}, Matches found - {}/{}".format(i,j,len(good), MIN_MATCH_COUNT) )
+            logger.debug( "{}->{}, Matches found - {}/{}".format(i,j,len(good), MIN_MATCH_COUNT) )
             connections.union(i, j)
         else:
-            print( "{}->{}, Not enough matches found - {}/{}".format(i,j,len(good), MIN_MATCH_COUNT) )
+            logger.debug( "{}->{}, Not enough matches found - {}/{}".format(i,j,len(good), MIN_MATCH_COUNT) )
     
     collections = connections.get_connected_components()
     collections = sorted(collections, key=len, reverse=True)
-    print(collections)
-    print(len(collections), "unblended collections found")
+    logger.debug(collections)
+    logger.debug(len(collections), "unblended collections found")
 
 
 def get_roi_from_image(image):
@@ -355,7 +397,7 @@ for unblended_image_group in unblended_collections:
     key_points_broken = False
     
     while len(unblended_image_indexes)!=0:
-        print(unblended_image_indexes)
+        logger.debug(unblended_image_indexes)
         matched_once = False
         remove_indexes = list()
         roi = None
@@ -374,10 +416,10 @@ for unblended_image_group in unblended_collections:
                 thiskp, thisdes = detect_and_compute_from_roi(current_image, current_roi)
                 refkp, refdes = detect_and_compute_from_roi(reference_image, roi)
             end = time.time()
-            print("0", end-start)
+            logger.debug("0", end-start)
 
             if refdes is None:
-                print(f"{i} {k} Key points not found in ref. Moving to next blend.")
+                logger.warning(f"{i} {k} Key points not found in ref. Moving to next blend.")
                 unblended_collections.append(unblended_image_indexes[k:])
                 key_points_broken = True
                 break
@@ -387,7 +429,7 @@ for unblended_image_group in unblended_collections:
             start = time.time()
             matches = matcherfunc(thisdes, refdes, 2)
             end = time.time()
-            print("1", end-start)
+            logger.debug("1", end-start)
 
             start = time.time()
             good = list()
@@ -395,7 +437,7 @@ for unblended_image_group in unblended_collections:
                 if match[0].distance < RATIO*match[1].distance:
                     good.append([match[0]])
             end = time.time()
-            print("2", end-start)
+            logger.debug("2", end-start)
 
             if len(good)>=MIN_MATCH_COUNT:
                 matched_once = True
@@ -403,16 +445,16 @@ for unblended_image_group in unblended_collections:
                 src_pts = np.float32([thiskp[m[0].queryIdx].pt for m in good]).reshape(-1,1,2)
                 dst_pts = np.float32([refkp[m[0].trainIdx].pt for m in good]).reshape(-1,1,2)
                 end = time.time()
-                print("3", end-start)
+                logger.debug("3", end-start)
                 if MODE == "affine":
                     start = time.time()
                     M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
                     end = time.time()
-                    print("4", end-start)
+                    logger.debug("4", end-start)
                     start = time.time()
                     warped_image = cv2.warpAffine(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
                     end = time.time()
-                    print("5", end-start)
+                    logger.debug("5", end-start)
                 elif MODE == "perspective":
                     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
                     warped_image = cv2.warpPerspective(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
@@ -423,12 +465,12 @@ for unblended_image_group in unblended_collections:
                 start = time.time()
                 reference_image = seamless_merge(warped_image, reference_image)
                 end = time.time()
-                print("6", end-start)
+                logger.debug("6", end-start)
                                 
                 remove_indexes.append(k)
-                print( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
+                logger.debug( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
             else:
-                print( "Blend {}/{} ({}/{} blended): {}->ref, Not enough matches found - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
+                logger.debug( "Blend {}/{} ({}/{} blended): {}->ref, Not enough matches found - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
                 roi = None
 
             reference_image = crop_image(reference_image) # Removing padding
@@ -450,7 +492,7 @@ for unblended_image_group in unblended_collections:
     i = i+1
 
 
-print("Number of blends formed:", len(blended_collections))
+logger.info("Number of blends formed:", len(blended_collections))
 
 delfiles = glob.glob(f'{STITCH_DIR}/*')
 for f in delfiles:
@@ -466,16 +508,11 @@ for i in range(0, len(blended_collections)):
 
 for i, blend in enumerate(blended_collections):
     stitchpath = os.path.join(STITCH_DIR,f"stitched_{i}_{len(unblended_collections[i])}.png")
-    print(stitchpath)
+    logger.info("Stitch saved to", stitchpath)
     cv2.imwrite(stitchpath, blend)
     # cv2.imwrite(stitchpath, selective_color_blur(blend, (0,0,0), 20, 9))
     i = i + 1
-    # while True:
-    #     key = cv2.waitKey(0) & 0xFF
-    #     print(k)
-    #     if key == ord('c'): # you can put any key here
-    #         cv2.destroyAllWindows()
-    #         break
+
 
 end_time = time.time()
-print("Time taken:", end_time - start_time, "seconds")
+logger.info("Time taken:", end_time - start_time, "seconds")
