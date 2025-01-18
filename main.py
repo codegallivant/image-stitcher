@@ -96,18 +96,12 @@ if INPUT_LIMIT != None:
 
 print(files)
 
-#  read the images by taking their path
 images = LazyList(lambda index: load_image(files[index]), len(files))
+
 for i in range(0, len(files)):
-    # print(files[i][-4:])
-    # if files[i][-4:] == ".jpg":
     print("Displaying", files[i])
-    # print(image)
-    # image = image[:,65:]
     cv2.imshow('a', images[i])
     cv2.waitKey(1)
-    # time.sleep(0.3)
-    # images.append(images[i])
 
 cv2.destroyAllWindows()
 
@@ -203,30 +197,18 @@ class DynamicConnectivity:
     
 connections = DynamicConnectivity(len(images))
 
-
-# Determining which image is connected with which image
-# matchedimages = list()
-
-# plt.figure()
-
-# f, axarr = plt.subplots(len(images), len(images))
-
 def deep_copy_dmatches(dmatches):
             return [[cv2.DMatch(_d[0].queryIdx, _d[0].trainIdx, _d[0].imgIdx, _d[0].distance)] for _d in dmatches]
         
 for i in range(0, len(images)):
-    # cv.drawMatchesKnn expects list of lists as matches.
-    # matchedimages.append(list())
     for j in range(0, len(images)):
 
-        # Remove if related images not consecutive
         if j==i:
             continue
         if CONSECUTIVE_RANGE != None:
             if abs(j-i)>CONSECUTIVE_RANGE:
                 continue
-        
-        
+                
         # matches = bf.knnMatch(des[i],des[j],k=2)
         matches = matcherfunc(des[i], des[j], 2)
         # Apply ratio test
@@ -235,18 +217,7 @@ for i in range(0, len(images)):
             if len(match)>1:
                 if match[0].distance < RATIO*match[1].distance:
                     good.append([match[0]])
-        # good2 = deep_copy_dmatches(good)
-                
-        # matchedimage = cv2.drawMatchesKnn(images[i],kp[i],images[j],kp[j],good,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-        # matchedimages[i].append(matchedimage)
-        # axarr[i][j].imshow(matchedimages[i][j])
-        # good = []
-        # for x in matches:
-        #     if len(x) > 1:
-        #         if x[0].distance < 0.7*x[1].distance:
-        #             good.append(x[0])
-        # del good
-        # good = good2
+        
         if len(good)>MIN_MATCH_COUNT:
             print( "{}->{}, Matches found - {}/{}".format(i,j,len(good), MIN_MATCH_COUNT) )
             connections.union(i, j)
@@ -258,11 +229,7 @@ for i in range(0, len(images)):
     print(collections)
     print(len(collections), "unblended collections found")
 
-# plt.show()
 
-# collections = connections.get_connected_components()
-# collections = sorted(collections, key=len, reverse=True)
-# print(collections)
 def get_roi_from_image(image):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     non_zero_coords = cv2.findNonZero(gray_image)
@@ -326,7 +293,6 @@ def selective_color_blur(image, target_color, color_threshold, kernel_size):
     return blurred_image
 
 
-# create new image of desired size and color for padding
 def getpaddedimg(new_image_height, new_image_width, old_image_width, old_image_height, img, channels = 3):
     color = (0,0,0)
     if channels == 1:
@@ -358,8 +324,6 @@ def crop_image(im):
     return np.array(result)
 
 
-# stitch_order = list()
-# image_warps = list()
 def detect_and_compute_from_roi(image, roi):
     p1, p2 = roi
     x, y = p1
@@ -387,11 +351,6 @@ for unblended_image_group in unblended_collections:
     ref = unblended_image_indexes[0]
     reference_image = images[ref]
     unblended_image_indexes.remove(ref)
-
-    # stitch_order.append(list())
-    # image_warps.append(list())
-    # stitch_order[i].append(ref)
-    # image_warps[i].append(reference_image)
     
     key_points_broken = False
     
@@ -406,7 +365,7 @@ for unblended_image_group in unblended_collections:
             reference_image = getpaddedimg(new_image_height, new_image_width, reference_image.shape[1], reference_image.shape[0], reference_image)
             current_image = getpaddedimg(new_image_height, new_image_width, image_shapes[k][1], image_shapes[k][0], images[k])
             current_roi = get_roi_from_image(current_image)
-            
+
             start = time.time()
             if roi == None or CONSECUTIVE_RANGE == None:
                 thiskp, thisdes = sift.detectAndCompute(current_image, None)
@@ -460,10 +419,7 @@ for unblended_image_group in unblended_collections:
 
                 cv2.imwrite('warped_image.png', warped_image)
                 if CONSECUTIVE_RANGE != None:
-                    roi = get_roi_from_image(warped_image)
-                    print(roi)
-                cv2.imwrite('warped_image_roi.png', warped_image[roi[0][1]:roi[1][1], roi[0][0]:roi[1][0]])
-                
+                    roi = get_roi_from_image(warped_image)                
 
                 start = time.time()
                 reference_image = seamless_merge(warped_image, reference_image)
@@ -472,19 +428,10 @@ for unblended_image_group in unblended_collections:
                                 
                 # unblended_image_indexes.remove(k) 
                 remove_indexes.append(k)
-                print( "{}->ref blended, enough matches - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
+                print( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
             else:
-                print( "{}->ref, Not enough matches found - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
+                print( "Blend {}/{} ({}/{} blended): {}->ref, Not enough matches found - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
                 roi = None
-
-            # if FIND_ROUTE is True:
-            #     for tpi in range(0, len(track_points)):
-            #         if k == point_img_index[tpi] or (point_img_index[tpi] in unblended_image_group and point_img_index[tpi] not in unblended_image_indexes):
-            #             # Take into account cropping
-            #             print(track_points)
-            #             print(get_black_pixels_before_color(reference_image))
-            #             track_points[tpi] = np.subtract(np.array(track_points[tpi]),np.array([get_black_pixels_before_color(reference_image,"rows"), get_black_pixels_before_color(reference_image,"columns")]))
-            #             print("tp",track_points)
 
             reference_image = crop_image(reference_image) # Removing padding
 
