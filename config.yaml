@@ -1,9 +1,10 @@
 project_dir: "/mnt/d/image-stitcher/"
 input_dir: "/mnt/d/datasets/isdc_test_drone_datasets/d1"
-stitch_dir: /mnt/d/image-stitcher/stitched/stitched
-input_limit: null # Set to None if all input images should be considered
+stitch_dir: /mnt/d/image-stitcher/stitched/stitched5
+input_limit: null # Set to null if all input images should be considered
 
+resize: 720x480 # Set to null for no resizing
 mode: 0 # 0: affine, 1: perspective
-consecutive_range: 2 # Set to None if all should be checked
-min_match_threshold: 20
-lowes_ratio: 0.6
+consecutive_range: 2 # Set to null if all should be checked
+min_match_threshold: 5
+lowes_ratio: 0.65

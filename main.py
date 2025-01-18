@@ -26,11 +26,25 @@ with open("config.yaml", 'r') as ymlfile:
     MODE = modes[cfg["mode"]]
     CONSECUTIVE_RANGE = cfg["consecutive_range"]
     INPUT_LIMIT = cfg["input_limit"]
-
+    if cfg['resize'] == None:
+        RESIZE = None
+    else:
+        RESIZE = [int(x) for x in cfg["resize"].split('x')]
 
 def load_image(filepath):
     image = cv2.imread(filepath)
     image = image[:,65:]    
+    if RESIZE != None:
+        h, w = RESIZE
+        if h==len(image) and w==len(image[0]):
+            return image
+        if h*w < image.shape[0]*image.shape[1]:
+            interp = cv2.INTER_AREA
+        elif h*w > image.shape[0]*image.shape[1]:
+            interp = cv2.INTER_CUBIC
+        else: 
+            interp = cv2.INTER_LINEAR
+        image = cv2.resize(image, (h,w), interpolation=interp)
     return image
 
 
@@ -60,12 +74,9 @@ files = os.listdir(INPUT_DIR)
 files = [os.path.join(INPUT_DIR, file) for file in files]
 print(INPUT_DIR)
 
-files = [file for file in files if file[-4:]==".png"]
-if INPUT_LIMIT != None:
-    files = files[:INPUT_LIMIT]
-print(files)
+files = [file for file in files if file[-4:]==".png" or file[-4:]==".jpg"]
 
-files = [p[1] for p in enumerate(files) if p[0]%5==0]
+files = [p[1] for p in enumerate(files) if p[0]%1==0]
 def sort_key(s, a):
     p = os.path.basename(s)[:-4].split('_')
     p = [x.split('.') for x in p]
@@ -76,7 +87,10 @@ def sort_key(s, a):
     return int(pf[a])
 files = sorted(files, key=lambda x: (sort_key(x, 1), sort_key(x, 2), sort_key(x, 3)))
 
-# files = files[:5]
+if INPUT_LIMIT != None:
+    files = files[:INPUT_LIMIT]
+
+print(files)
 
 #  read the images by taking their path
 images = LazyList(lambda index: load_image(files[index]), len(files))
@@ -113,6 +127,7 @@ for i in range(0, len(images)):
 
 for index in sorted(emptyindexes, reverse=True):
     # del images[index]
+    images.length -= 1
     del kp[index]
     del des[index]
     del files[index]
@@ -169,7 +184,7 @@ connections = DynamicConnectivity(len(images))
 
 
 # Determining which image is connected with which image
-matchedimages = list()
+# matchedimages = list()
 
 # plt.figure()
 
@@ -180,7 +195,7 @@ def deep_copy_dmatches(dmatches):
         
 for i in range(0, len(images)):
     # cv.drawMatchesKnn expects list of lists as matches.
-    matchedimages.append(list())
+    # matchedimages.append(list())
     for j in range(0, len(images)):
 
         # Remove if related images not consecutive
@@ -198,18 +213,18 @@ for i in range(0, len(images)):
             if len(match)>1:
                 if match[0].distance < RATIO*match[1].distance:
                     good.append([match[0]])
-        good2 = deep_copy_dmatches(good)
+        # good2 = deep_copy_dmatches(good)
                 
-        matchedimage = cv2.drawMatchesKnn(images[i],kp[i],images[j],kp[j],good,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-        matchedimages[i].append(matchedimage)
+        # matchedimage = cv2.drawMatchesKnn(images[i],kp[i],images[j],kp[j],good,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        # matchedimages[i].append(matchedimage)
         # axarr[i][j].imshow(matchedimages[i][j])
         # good = []
         # for x in matches:
         #     if len(x) > 1:
         #         if x[0].distance < 0.7*x[1].distance:
         #             good.append(x[0])
-        del good
-        good = good2
+        # del good
+        # good = good2
         if len(good)>MIN_MATCH_COUNT:
             print( "{}->{}, Matches found - {}/{}".format(i,j,len(good), MIN_MATCH_COUNT) )
             connections.union(i, j)
@@ -245,8 +260,12 @@ def seamless_merge(image1, image2):
     # overlap_mask = cv2.bitwise_not(overlap_mask)
     image2_non_overlap = np.copy(image2)
     image1_non_overlap = np.copy(image1)
-    image2_non_overlap[overlap_mask==255] = 0.6*image2[overlap_mask==255]
-    image1_non_overlap[overlap_mask==255] = 0.4*image1[overlap_mask==255]
+    if CONSECUTIVE_RANGE != None:
+        ref_image_contrib = 0.2
+    else:
+        ref_image_contrib = 0.5
+    image2_non_overlap[overlap_mask==255] = ref_image_contrib*image2[overlap_mask==255]
+    image1_non_overlap[overlap_mask==255] = (1-ref_image_contrib)*image1[overlap_mask==255]
 
     # plt.imshow(overlap_mask)
     # plt.show()
@@ -266,7 +285,7 @@ def seamless_merge(image1, image2):
 def selective_color_blur(image, target_color, color_threshold, kernel_size):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Threshold the grayscale image to select black pixels
-    _, mask = cv2.threshold(gray_image, 20, 255, cv2.THRESH_BINARY)
+    _, mask = cv2.threshold(gray_image, 40, 255, cv2.THRESH_BINARY)
     mask = cv2.bitwise_not(mask)
     # Apply blur only to pixels of the specified color
     blurred_image = np.copy(image)
@@ -334,6 +353,7 @@ for unblended_image_group in unblended_collections:
     while len(unblended_image_indexes)!=0:
         print(unblended_image_indexes)
         matched_once = False
+        remove_indexes = list()
         for k in unblended_image_indexes:
             new_image_width = reference_image.shape[1] + (2*image_shapes[k][1])
             new_image_height = reference_image.shape[0] + (2*image_shapes[k][0])
@@ -357,11 +377,11 @@ for unblended_image_group in unblended_collections:
             for match in matches:
                 if match[0].distance < RATIO*match[1].distance:
                     good.append([match[0]])
-            good2 = deep_copy_dmatches(good)
-            matchedimage = cv2.drawMatchesKnn(current_image, thiskp, reference_image,refkp,good,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+            # good2 = deep_copy_dmatches(good)
+            # matchedimage = cv2.drawMatchesKnn(current_image, thiskp, reference_image,refkp,good,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
 
-            del good
-            good = good2
+            # del good
+            # good = good2
             if len(good)>=MIN_MATCH_COUNT:
                 matched_once = True
                 src_pts = np.float32([thiskp[m[0].queryIdx].pt for m in good]).reshape(-1,1,2)
@@ -406,9 +426,11 @@ for unblended_image_group in unblended_collections:
                 #         cv2.destroyAllWindows()
                 #         break
                 
-                unblended_image_indexes.remove(k) 
+                # unblended_image_indexes.remove(k) 
+                remove_indexes.append(k)
+                print( "{}->ref blended, enough matches - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
             else:
-                print( "{}->ref, Not enough matches are found - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
+                print( "{}->ref, Not enough matches found - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
 
             # if FIND_ROUTE is True:
             #     for tpi in range(0, len(track_points)):
@@ -420,7 +442,9 @@ for unblended_image_group in unblended_collections:
             #             print("tp",track_points)
 
             reference_image = crop_image(reference_image) # Removing padding
-            
+
+        for r in remove_indexes:
+            unblended_image_indexes.remove(r)            
             
         if matched_once == False:
             # reference_image = crop_image(reference_image)
@@ -450,8 +474,8 @@ for i in range(0, len(blended_collections)):
 
 
 
-for blend in blended_collections:
-    stitchpath = os.path.join(STITCH_DIR,f"stitched{i}.jpg")
+for i, blend in enumerate(blended_collections):
+    stitchpath = os.path.join(STITCH_DIR,f"stitched_{i}_{len(unblended_collections[i])}.png")
     print(stitchpath)
     cv2.imwrite(stitchpath, blend)
     # cv2.imwrite(stitchpath, selective_color_blur(blend, (0,0,0), 20, 9))
