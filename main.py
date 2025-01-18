@@ -417,7 +417,6 @@ for unblended_image_group in unblended_collections:
                     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
                     warped_image = cv2.warpPerspective(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
 
-                cv2.imwrite('warped_image.png', warped_image)
                 if CONSECUTIVE_RANGE != None:
                     roi = get_roi_from_image(warped_image)                
 
@@ -426,7 +425,6 @@ for unblended_image_group in unblended_collections:
                 end = time.time()
                 print("6", end-start)
                                 
-                # unblended_image_indexes.remove(k) 
                 remove_indexes.append(k)
                 print( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
             else:
