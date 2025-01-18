@@ -13,6 +13,8 @@ import yaml
 
 start_time = time.time()
 
+algorithms = ["sift", "orb", "akaze", "surf"]
+matchers = ["bf", "flann"]
 modes = ["affine", "perspective"]
 
 # Read the configuration file
@@ -23,7 +25,9 @@ with open("config.yaml", 'r') as ymlfile:
     STITCH_DIR = cfg["stitch_dir"]
     MIN_MATCH_COUNT = cfg["min_match_threshold"]
     RATIO = cfg["lowes_ratio"]
-    MODE = modes[cfg["mode"]]
+    ALGORITHM = algorithms[cfg["algorithm"]]
+    MATCHER = matchers[cfg["matcher"]]
+    MODE = modes[cfg["type"]]
     CONSECUTIVE_RANGE = cfg["consecutive_range"]
     INPUT_LIMIT = cfg["input_limit"]
     if cfg['resize'] == None:
@@ -109,8 +113,15 @@ cv2.destroyAllWindows()
 
 print(len(images), "images displayed")
 
+if ALGORITHM == 'sift':
+    sift = cv2.SIFT_create()
+elif ALGORITHM == 'orb':
+    sift = cv2.ORB_create()
+elif ALGORITHM == 'akaze':
+    sift = cv2.AKAZE_create()
+elif ALGORITHM == 'surf':
+    sift = cv2.xfeatures2d.SURF_create()
 
-sift = cv2.SIFT_create()
 kp = list()
 des = list()
 
@@ -135,9 +146,19 @@ for index in sorted(emptyindexes, reverse=True):
 gc.collect()
 
 
-# BFMatcher with default params
-bf = cv2.BFMatcher()
+if MATCHER == "bf":
+    bf = cv2.BFMatcher()
+elif MATCHER == "flann":
+    bf = cv2.DescriptorMatcher_create(cv2.DescriptorMatcher_FLANNBASED)
 
+def matcherfunc(descriptors_1, descriptors_2, k):
+    if MATCHER == "flann":
+        if descriptors_1.dtype != np.float32:
+            descriptors_1 = descriptors_1.astype(np.float32)
+        if descriptors_2.dtype != np.float32:
+            descriptors_2 = descriptors_2.astype(np.float32)
+    matches = bf.knnMatch(descriptors_1,descriptors_2,k=2)
+    return matches
 
 
 class DynamicConnectivity:
@@ -206,7 +227,8 @@ for i in range(0, len(images)):
                 continue
         
         
-        matches = bf.knnMatch(des[i],des[j],k=2)
+        # matches = bf.knnMatch(des[i],des[j],k=2)
+        matches = matcherfunc(des[i], des[j], 2)
         # Apply ratio test
         good = list()
         for match in matches:
@@ -234,13 +256,21 @@ for i in range(0, len(images)):
     collections = connections.get_connected_components()
     collections = sorted(collections, key=len, reverse=True)
     print(collections)
+    print(len(collections), "unblended collections found")
 
 # plt.show()
 
 # collections = connections.get_connected_components()
 # collections = sorted(collections, key=len, reverse=True)
 # print(collections)
-
+def get_roi_from_image(image):
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    non_zero_coords = cv2.findNonZero(gray_image)
+    if non_zero_coords is None:
+        raise ValueError("The input image has no non-black regions.")
+    x, y, w, h = cv2.boundingRect(non_zero_coords)
+    roi_coords = ((x, y), (x + w, y + h))
+    return roi_coords
 
 def seamless_merge(image1, image2):
     # Convert images to grayscale
@@ -270,8 +300,8 @@ def seamless_merge(image1, image2):
     # plt.imshow(overlap_mask)
     # plt.show()
     # Perform seamless cloning only in the non-overlapping regions
-    height, width, _ = image1.shape
-    center = (width // 2, height // 2)
+    # height, width, _ = image1.shape
+    # center = (width // 2, height // 2)
     # merged_image = cv2.seamlessClone(image2_non_overlap, image1_non_overlap, np.zeros(image2.shape[0:2]).fill(255), center, cv2.MIXED_CLONE)
     merged_image = image1_non_overlap + image2_non_overlap
     # merged_image = cv2.seamlessClone(image2_overlap, merged_image, np.zeros(image2.shape[0:2]).fill(255), center, cv2.MIXED_CLONE, 1)
@@ -330,6 +360,21 @@ def crop_image(im):
 
 # stitch_order = list()
 # image_warps = list()
+def detect_and_compute_from_roi(image, roi):
+    p1, p2 = roi
+    x, y = p1
+    w = p2[0] - p1[0]
+    h = p2[1] - p1[1]
+    roi_img = image[y:y + h, x:x + w]
+    keypoints_roi, descriptors = sift.detectAndCompute(roi_img, None)
+    # Map ROI keypoints back to the whole image's coordinates
+    keypoints_image = []
+    for kp in keypoints_roi:
+        # Offset the coordinates by the ROI's top-left corner
+        kp.pt = (kp.pt[0] + x, kp.pt[1] + y)
+        keypoints_image.append(kp)
+    return keypoints_image, descriptors
+
 
 image_shapes = [image.shape for image in images]
 
@@ -354,14 +399,23 @@ for unblended_image_group in unblended_collections:
         print(unblended_image_indexes)
         matched_once = False
         remove_indexes = list()
+        roi = None
         for k in unblended_image_indexes:
             new_image_width = reference_image.shape[1] + (2*image_shapes[k][1])
             new_image_height = reference_image.shape[0] + (2*image_shapes[k][0])
             reference_image = getpaddedimg(new_image_height, new_image_width, reference_image.shape[1], reference_image.shape[0], reference_image)
             current_image = getpaddedimg(new_image_height, new_image_width, image_shapes[k][1], image_shapes[k][0], images[k])
-
-            thiskp, thisdes = sift.detectAndCompute(current_image, None)
-            refkp, refdes = sift.detectAndCompute(reference_image, None)
+            current_roi = get_roi_from_image(current_image)
+            
+            start = time.time()
+            if roi == None or CONSECUTIVE_RANGE == None:
+                thiskp, thisdes = sift.detectAndCompute(current_image, None)
+                refkp, refdes = sift.detectAndCompute(reference_image, None)
+            else:
+                thiskp, thisdes = detect_and_compute_from_roi(current_image, current_roi)
+                refkp, refdes = detect_and_compute_from_roi(reference_image, roi)
+            end = time.time()
+            print("0", end-start)
 
             if refdes is None:
                 print(f"{i} {k} Key points not found in ref. Moving to next blend.")
@@ -369,68 +423,59 @@ for unblended_image_group in unblended_collections:
                 key_points_broken = True
                 break
                 
-            
-            
             # print(thisdes.dtype, refdes.dtype)
-            matches = bf.knnMatch(thisdes,refdes,k=2)
+            # matches = bf.knnMatch(thisdes,refdes,k=2)
+            start = time.time()
+            matches = matcherfunc(thisdes, refdes, 2)
+            end = time.time()
+            print("1", end-start)
+
+            start = time.time()
             good = list()
             for match in matches:
                 if match[0].distance < RATIO*match[1].distance:
                     good.append([match[0]])
-            # good2 = deep_copy_dmatches(good)
-            # matchedimage = cv2.drawMatchesKnn(current_image, thiskp, reference_image,refkp,good,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+            end = time.time()
+            print("2", end-start)
 
-            # del good
-            # good = good2
             if len(good)>=MIN_MATCH_COUNT:
                 matched_once = True
+                start = time.time()
                 src_pts = np.float32([thiskp[m[0].queryIdx].pt for m in good]).reshape(-1,1,2)
                 dst_pts = np.float32([refkp[m[0].trainIdx].pt for m in good]).reshape(-1,1,2)
-                # print(src_pts)
-                # print(dst_pts)
+                end = time.time()
+                print("3", end-start)
                 if MODE == "affine":
+                    start = time.time()
                     M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+                    end = time.time()
+                    print("4", end-start)
+                    start = time.time()
                     warped_image = cv2.warpAffine(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
-                    # if FIND_ROUTE is True:
-                    #     for tpi in range(0, len(track_points)):
-                    #         # Take into account padding and transform
-                    #         if k == point_img_index[tpi]:
-                    #             # Going to be blended
-                    #             homogenous_coords = np.array([track_points[tpi][0]+((new_image_height-images[k].shape[0])/2), track_points[tpi][1]+((new_image_width-images[k].shape[1])/2), 1])
-                    #         # if (point_img_index[tpi] in unblended_image_group and point_img_index[tpi] not in unblended_image_indexes):
-                    #         #     # Already blended
-                    #         #     homogenous_coords = np.array([track_points[tpi][0]+((new_image_height-reference_image.shape[0])/2), track_points[tpi][1]+((new_image_width-reference_image.shape[1])/2), 1])
-                    #         if k == point_img_index[tpi]:
-                    #             track_points[tpi] = np.matmul(M, homogenous_coords)
-                    #             print("tp",track_points)
+                    end = time.time()
+                    print("5", end-start)
                 elif MODE == "perspective":
                     M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
                     warped_image = cv2.warpPerspective(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
 
-                # stitch_order[i].append(k)
-                # image_warps[i].append(warped_image) # This image warp will be used for prediction
-                # alpha = 1.0
-                # beta = 1.0
-                # reference_image = cv2.addWeighted(stitched_image, alpha, reference_image, beta, 0.0)
-                # reference_image = cv2.bitwise_or(reference_image, warped_image)
-                # reference_image = cv2.seamlessClone(warped_image, reference_image, np.zeros(reference_image.shape), (0,0), cv2.MIXED_CLONE)
-                reference_image = seamless_merge(warped_image, reference_image)
-                # reference_image = cv2.seamlessClone(warped_image, reference_image, mask, (reference_image.shape[0]//2, reference_image.shape[1]//2), cv2.MIXED_CLONE)
-                # reference_image = alpha_blend_with_mask(reference_image, warped_image, 1)
-
-                # cv2.imshow(f"stitch {k}",reference_image)
-                # while True:
-                #     key = cv2.waitKey(0) & 0xFF
-                #     print(k)
-                #     if key == ord('c'): # you can put any key here
-                #         cv2.destroyAllWindows()
-                #         break
+                cv2.imwrite('warped_image.png', warped_image)
+                if CONSECUTIVE_RANGE != None:
+                    roi = get_roi_from_image(warped_image)
+                    print(roi)
+                cv2.imwrite('warped_image_roi.png', warped_image[roi[0][1]:roi[1][1], roi[0][0]:roi[1][0]])
                 
+
+                start = time.time()
+                reference_image = seamless_merge(warped_image, reference_image)
+                end = time.time()
+                print("6", end-start)
+                                
                 # unblended_image_indexes.remove(k) 
                 remove_indexes.append(k)
                 print( "{}->ref blended, enough matches - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
             else:
                 print( "{}->ref, Not enough matches found - {}/{}".format(k,len(good), MIN_MATCH_COUNT) )
+                roi = None
 
             # if FIND_ROUTE is True:
             #     for tpi in range(0, len(track_points)):
