@@ -17,7 +17,7 @@ from tqdm import tqdm as _tqdm
 
 start_time = time.time()
 
-algorithms = ["sift", "orb", "akaze", "surf"]
+algorithms = ["sift", "orb", "akaze"]
 matchers = ["bf", "flann"]
 modes = ["affine", "perspective"]
 loglevels = [logging.DEBUG, logging.INFO, logging.WARNING]
@@ -161,8 +161,8 @@ elif ALGORITHM == 'orb':
     sift = cv2.ORB_create()
 elif ALGORITHM == 'akaze':
     sift = cv2.AKAZE_create()
-elif ALGORITHM == 'surf':
-    sift = cv2.xfeatures2d.SURF_create()
+# elif ALGORITHM == 'surf':
+#     sift = cv2.xfeatures2d.SURF_create()
 
 kp = list()
 des = list()
@@ -404,6 +404,9 @@ blended_collections = list()
 
 for i, unblended_image_group in enumerate(unblended_collections):
     unblended_image_indexes = copy.deepcopy(unblended_image_group)
+    if len(unblended_image_indexes) < 1:
+        logger.warning("No images found in unblended group. Moving to next blend.","\n", unblended_image_group,"\n", unblended_collections), 
+        continue
     ref = unblended_image_indexes[0]
     reference_image = images[ref]
     unblended_image_indexes.remove(ref)
@@ -448,8 +451,9 @@ for i, unblended_image_group in enumerate(unblended_collections):
             start = time.time()
             good = list()
             for match in matches:
-                if match[0].distance < RATIO*match[1].distance:
-                    good.append([match[0]])
+                if len(match) > 1:
+                    if match[0].distance < RATIO*match[1].distance:
+                        good.append([match[0]])
             end = time.time()
             logger.debug("2", end-start)
 
