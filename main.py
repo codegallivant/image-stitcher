@@ -12,6 +12,7 @@ import gc
 import yaml
 import logging
 import sys
+from tqdm import tqdm as _tqdm
 
 
 start_time = time.time()
@@ -26,6 +27,9 @@ FORMAT = "[%(filename)s:%(lineno)s - %(funcName)s] %(message)s"
 logging.basicConfig(format=FORMAT)
 _logger.setLevel(logging.DEBUG)
 
+def tqdm(**kwargs):
+    kwargs["bar_format"] = '{desc:<5.5}{percentage:3.0f}%|{bar:20}{r_bar}'
+    return _tqdm(**kwargs)
 
 class LogWrapper():
 
@@ -149,6 +153,8 @@ cv2.destroyAllWindows()
 
 logger.info(len(images), "images displayed")
 
+logger.info(f"Initialising {ALGORITHM.upper()}")
+
 if ALGORITHM == 'sift':
     sift = cv2.SIFT_create()
 elif ALGORITHM == 'orb':
@@ -182,6 +188,7 @@ for index in sorted(emptyindexes, reverse=True):
 gc.collect()
 
 
+logger.info(f"Initialising {MATCHER.upper()} matcher")
 if MATCHER == "bf":
     bf = cv2.BFMatcher()
 elif MATCHER == "flann":
@@ -242,7 +249,9 @@ connections = DynamicConnectivity(len(images))
 def deep_copy_dmatches(dmatches):
             return [[cv2.DMatch(_d[0].queryIdx, _d[0].trainIdx, _d[0].imgIdx, _d[0].distance)] for _d in dmatches]
         
-for i in range(0, len(images)):
+logger.info("Matching images")
+
+for i in tqdm(iterable=range(0, len(images))):
     for j in range(0, len(images)):
 
         if j==i:
@@ -271,6 +280,7 @@ for i in range(0, len(images)):
     logger.debug(collections)
     logger.debug(len(collections), "unblended collections found")
 
+logger.info(len(collections), "possible blends found")
 
 def get_roi_from_image(image):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -382,13 +392,17 @@ def detect_and_compute_from_roi(image, roi):
     return keypoints_image, descriptors
 
 
+logger.info("Blending images")
+
+progress_bar = tqdm(total=len(images))
+
 image_shapes = [image.shape for image in images]
 
 unblended_collections = copy.deepcopy(collections)
 blended_collections = list()
 
-i = 0
-for unblended_image_group in unblended_collections:
+
+for i, unblended_image_group in enumerate(unblended_collections):
     unblended_image_indexes = copy.deepcopy(unblended_image_group)
     ref = unblended_image_indexes[0]
     reference_image = images[ref]
@@ -469,6 +483,7 @@ for unblended_image_group in unblended_collections:
                                 
                 remove_indexes.append(k)
                 logger.debug( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
+                progress_bar.update(1)
             else:
                 logger.debug( "Blend {}/{} ({}/{} blended): {}->ref, Not enough matches found - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good), MIN_MATCH_COUNT) )
                 roi = None
@@ -485,12 +500,11 @@ for unblended_image_group in unblended_collections:
         if key_points_broken == True:
             break
     
-        
-
     # reference_image = cv2.medianBlur(reference_image, 3)     # Removing pepper noise developed during bitwise OR
     blended_collections.append(reference_image)
-    i = i+1
+    progress_bar.update(1)
 
+progress_bar.close()
 
 logger.info("Number of blends formed:", len(blended_collections))
 
@@ -504,11 +518,10 @@ for i in range(0, len(blended_collections)):
     blended_collections[i] = selective_color_blur(blended_collections[i], (0,0,0), 30, 17)
 #     blended_collections[i] = cv2.medianBlur(blended_collections[i], 5)     # Removing pepper noise developed during bitwise OR
 
+logger.info(f"Writing stitches to {STITCH_DIR}")
 
-
-for i, blend in enumerate(blended_collections):
+for i, blend in enumerate(tqdm(iterable=blended_collections)):
     stitchpath = os.path.join(STITCH_DIR,f"stitched_{i}_{len(unblended_collections[i])}.png")
-    logger.info("Stitch saved to", stitchpath)
     cv2.imwrite(stitchpath, blend)
     # cv2.imwrite(stitchpath, selective_color_blur(blend, (0,0,0), 20, 9))
     i = i + 1
