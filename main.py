@@ -13,6 +13,7 @@ import yaml
 import logging
 import sys
 from tqdm import tqdm as _tqdm
+from scipy.ndimage import binary_dilation
 
 
 start_time = time.time()
@@ -291,6 +292,7 @@ def get_roi_from_image(image):
     roi_coords = ((x, y), (x + w, y + h))
     return roi_coords
 
+
 def seamless_merge(image1, image2):
     # Convert images to grayscale
     gray1 = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
@@ -331,10 +333,10 @@ def seamless_merge(image1, image2):
     return merged_image
 
 
-def selective_color_blur(image, target_color, color_threshold, kernel_size):
+def selective_color_blur(image, target_color, kernel_size):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Threshold the grayscale image to select black pixels
-    _, mask = cv2.threshold(gray_image, 40, 255, cv2.THRESH_BINARY)
+    _, mask = cv2.threshold(gray_image, target_color, 255, cv2.THRESH_BINARY)
     mask = cv2.bitwise_not(mask)
     # Apply blur only to pixels of the specified color
     blurred_image = np.copy(image)
@@ -343,7 +345,6 @@ def selective_color_blur(image, target_color, color_threshold, kernel_size):
     del gray_image, mask
     gc.collect()
     return blurred_image
-
 
 def getpaddedimg(new_image_height, new_image_width, old_image_width, old_image_height, img, channels = 3):
     color = (0,0,0)
@@ -401,8 +402,11 @@ image_shapes = [image.shape for image in images]
 unblended_collections = copy.deepcopy(collections)
 blended_collections = list()
 
-
-for i, unblended_image_group in enumerate(unblended_collections):
+i = 0
+while True:
+    if i >= len(unblended_collections):
+        break
+    unblended_image_group = unblended_collections[i]
     unblended_image_indexes = copy.deepcopy(unblended_image_group)
     if len(unblended_image_indexes) < 1:
         logger.warning("No images found in unblended group. Moving to next blend.","\n", unblended_image_group,"\n", unblended_collections), 
@@ -426,12 +430,17 @@ for i, unblended_image_group in enumerate(unblended_collections):
             current_roi = get_roi_from_image(current_image)
 
             start = time.time()
+            if roi != None and CONSECUTIVE_RANGE != None:
+                try:
+                    thiskp, thisdes = detect_and_compute_from_roi(current_image, current_roi)
+                    refkp, refdes = detect_and_compute_from_roi(reference_image, roi)
+                except Exception as e:
+                    logger.warning("Error in detecting keypoints from ROI. Computing on whole image. Exception: ",str(e))
+                    roi = None
             if roi == None or CONSECUTIVE_RANGE == None:
                 thiskp, thisdes = sift.detectAndCompute(current_image, None)
                 refkp, refdes = sift.detectAndCompute(reference_image, None)
-            else:
-                thiskp, thisdes = detect_and_compute_from_roi(current_image, current_roi)
-                refkp, refdes = detect_and_compute_from_roi(reference_image, roi)
+   
             end = time.time()
             logger.debug("0", end-start)
 
@@ -478,7 +487,11 @@ for i, unblended_image_group in enumerate(unblended_collections):
                     warped_image = cv2.warpPerspective(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
 
                 if CONSECUTIVE_RANGE != None:
-                    roi = get_roi_from_image(warped_image)                
+                    try:
+                        roi = get_roi_from_image(warped_image)                
+                    except Exception as e:
+                        logger.warning("Error in getting ROI. Exception:",str(e))
+                        roi = None
 
                 start = time.time()
                 reference_image = seamless_merge(warped_image, reference_image)
@@ -503,10 +516,11 @@ for i, unblended_image_group in enumerate(unblended_collections):
 
         if key_points_broken == True:
             break
-    
+
     # reference_image = cv2.medianBlur(reference_image, 3)     # Removing pepper noise developed during bitwise OR
     blended_collections.append(reference_image)
     progress_bar.update(1)
+    i+=1
 
 progress_bar.close()
 
@@ -519,7 +533,8 @@ for f in delfiles:
 i = 0
 
 for i in range(0, len(blended_collections)):
-    blended_collections[i] = selective_color_blur(blended_collections[i], (0,0,0), 30, 17)
+    blended_collections[i] = selective_color_blur(blended_collections[i], 50, 21)
+
 #     blended_collections[i] = cv2.medianBlur(blended_collections[i], 5)     # Removing pepper noise developed during bitwise OR
 
 logger.info(f"Writing stitches to {STITCH_DIR}")
