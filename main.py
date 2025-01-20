@@ -128,14 +128,16 @@ logger.info("Input directory:", INPUT_DIR)
 files = [file for file in files if file[-4:]==".png" or file[-4:]==".jpg"]
 
 files = [p[1] for p in enumerate(files) if p[0]%1==0]
-def sort_key(s, a):
-    p = os.path.basename(s)[:-4].split('_')
-    p = [x.split('.') for x in p]
-    pf = list()
-    for xs in p:
-        for x in xs:
-            pf.append(x)
-    return int(pf[a])
+# def sort_key(s, a):
+#     p = os.path.basename(s)[:-4].split('_')
+#     p = [x.split('.') for x in p]
+#     pf = list()
+#     for xs in p:
+#         for x in xs:
+#             pf.append(x)
+#     return int(pf[a])
+def sort_key(s,a):
+    return int(os.path.basename(s)[6:-4])
 files = sorted(files, key=lambda x: (sort_key(x, 1), sort_key(x, 2), sort_key(x, 3)))
 
 if INPUT_LIMIT != None:

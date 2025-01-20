@@ -1,7 +1,7 @@
 project_dir: "/mnt/d/image-stitcher/"
 input_dir: "/mnt/d/datasets/isdc_test_drone_datasets/d1"
-stitch_dir: /mnt/d/image-stitcher/stitched/stitched18
-input_limit: 20 # Set to null if all input images should be considered
+stitch_dir: /mnt/d/image-stitcher/stitched/stitched19
+input_limit: 200 # Set to null if all input images should be considered
 
 resize: 720x480 # Set to null for no resizing
 algorithm: 1 # 0: SIFT, 1: ORB, 2: AKAZE
