@@ -23,7 +23,7 @@ with open("config.yaml", 'r') as ymlfile:
     CONSECUTIVE_RANGE = cfg["consecutive_range"]
     INPUT_LIMIT = cfg["input_limit"]
     ARBITRARY = cfg["arbitrary"]
-    REF_IMAGE_CONTRIB = cfg["ref_image_contrib"]
+    # REF_IMAGE_CONTRIB = cfg["ref_image_contrib"]
     if cfg['resize'] == None:
         RESIZE = None
     else:
@@ -62,11 +62,11 @@ if __name__ == "__main__":
         "resize": RESIZE, 
         "log_level": LOGLEVEL,
         "consecutive_range": CONSECUTIVE_RANGE,
-        "ref_image_contrib": REF_IMAGE_CONTRIB
+        # "ref_image_contrib": REF_IMAGE_CONTRIB
     }
 
-    if REF_IMAGE_CONTRIB is None:
-        del kwargs["ref_image_contrib"]
+    # if REF_IMAGE_CONTRIB is None:
+    #     del kwargs["ref_image_contrib"]
 
     if ARBITRARY:
         # Test arbitrary stitching

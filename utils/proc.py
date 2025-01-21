@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import gc
-from PIL import Image, ImageChops
+# from PIL import Image, ImageChops
 
 
 def resize_image(image, to_resize = None):
@@ -72,6 +72,54 @@ def seamless_merge(image1, image2, ref_image_contrib):
     return merged_image
 
 
+def seamless_gradient_merge(warped_img1, img2, feather_pixels = 5):
+    # Create base mask
+    mask = np.zeros_like(warped_img1).astype(np.float64)
+    mask[warped_img1 > 0] = 1
+
+    # Create horizontal gradient
+    for y in range(mask.shape[0]):
+        non_zero = np.where(mask[y, :, 0] > 0)[0]
+        if len(non_zero) > 0:
+            left_edge = non_zero[0]
+            right_edge = non_zero[-1]
+            # Feather left edge
+            for x in range(left_edge, min(left_edge + feather_pixels, mask.shape[1])):
+                alpha = (x - left_edge) / feather_pixels
+                mask[y, x] *= alpha
+            # Feather right edge
+            for x in range(max(0, right_edge - feather_pixels), right_edge + 1):
+                alpha = (right_edge - x) / feather_pixels
+                mask[y, x] *= alpha
+
+    # Create vertical gradient
+    for x in range(mask.shape[1]):
+        non_zero = np.where(mask[:, x, 0] > 0)[0]
+        if len(non_zero) > 0:
+            top_edge = non_zero[0]
+            bottom_edge = non_zero[-1]
+            # Feather top edge
+            for y in range(top_edge, min(top_edge + feather_pixels, mask.shape[0])):
+                alpha = (y - top_edge) / feather_pixels
+                mask[y, x] *= alpha
+            # Feather bottom edge
+            for y in range(max(0, bottom_edge - feather_pixels), bottom_edge + 1):
+                alpha = (bottom_edge - y) / feather_pixels
+                mask[y, x] *= alpha
+    
+    result = warped_img1 * mask + img2 * (1 - mask)
+        
+    return result.astype(np.uint8)
+
+
+def seamless_merge_into_roi(image1, image2, roi_coords, ref_image_contrib):
+    image2_roi = get_roi_from_corners(image2, roi_coords[0], roi_coords[1])
+    image2_roi_limits = get_roi_from_corners(image2, roi_coords[0], roi_coords[1], img = False)
+    # image2_p = image2.copy()
+    image2[image2_roi_limits[0]:image2_roi_limits[1], image2_roi_limits[2]:image2_roi_limits[3]] = (image2_roi*ref_image_contrib) + ((1-ref_image_contrib)*image1)
+    return image2
+
+
 def selective_color_blur(image, target_color, kernel_size):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Threshold the grayscale image to select black pixels
@@ -84,6 +132,7 @@ def selective_color_blur(image, target_color, kernel_size):
     del gray_image, mask
     gc.collect()
     return blurred_image
+
 
 def getpaddedimg(new_image_height, new_image_width, old_image_width, old_image_height, img, channels = 3):
     color = (0,0,0)
@@ -129,9 +178,12 @@ def transform_keypoints_from_roi(keypoints_roi, roi_topleft):
     return keypoints_image
 
 
-def get_roi_from_corners(image, p1, p2):
+def get_roi_from_corners(image, p1, p2, img = True):
     x, y = p1
     w = p2[0] - p1[0]
     h = p2[1] - p1[1]
     roi_img = image[y:y + h, x:x + w]
-    return roi_img
+    if img is True:
+        return roi_img
+    else:
+        return (y, y + h, x, x + w)

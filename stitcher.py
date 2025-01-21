@@ -8,8 +8,9 @@ import gc
 import logging
 from utils.logger import LogWrapper
 from utils.structs import DynamicConnectivity, LazyList
-from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, getpaddedimg, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image
+from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, getpaddedimg, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
 from utils.utils import tqdm, no_tqdm
+from scipy.ndimage import distance_transform_edt
 
 
 
@@ -23,7 +24,7 @@ class Stitcher:
                  matcher = 0,
                  type = 0,
                  resize = None,
-                 ref_image_contrib = 0.5
+                #  ref_image_contrib = 0.5
                  ):
         
         options_dict = {
@@ -49,11 +50,11 @@ class Stitcher:
         self.output_dir = output_dir
         self.min_match_count = min_match_count
         self.lowes_ratio_threshold = lowes_ratio_threshold
-        self.ref_image_contrib = ref_image_contrib
+        # self.ref_image_contrib = ref_image_contrib
         self.type = type
         self.resize = resize
         self.matcher = matcher
-        self.logger.info(f"Initialising {options_dict["matcher"][self.matcher].upper()} matcher")
+        self.logger.info(f"Initialising {options_dict['matcher'][self.matcher].upper()} matcher")
         if self.matcher == 0:
             # BF
             self.matcher_obj = cv2.BFMatcher()
@@ -62,7 +63,7 @@ class Stitcher:
             self.matcher_obj = cv2.DescriptorMatcher_create(cv2.DescriptorMatcher_FLANNBASED)
 
         self.algorithm = algorithm
-        self.logger.info(f"Initialising {options_dict["algorithm"][self.algorithm].upper()} algorithm")
+        self.logger.info(f"Initialising {options_dict['algorithm'][self.algorithm].upper()} algorithm")
         if self.algorithm == 0:
             # SIFT
             self.algorithm_obj = cv2.SIFT_create()
@@ -73,16 +74,18 @@ class Stitcher:
             # AKAZE
             self.algorithm_obj = cv2.AKAZE_create()
 
-        self.logger.info(f"Using {options_dict["type"][self.type].upper()} type stitching")
+        self.logger.info(f"Using {options_dict['type'][self.type].upper()} type stitching")
 
 
-    def get_matches(self, descriptors_1, descriptors_2, k):
+    def get_matches(self, descriptors_1, descriptors_2, k = 2):
+        if descriptors_1 is None or descriptors_2 is None:
+            return list()
         if self.matcher == 1: # FLANN
             if descriptors_1.dtype != np.float32:
                 descriptors_1 = descriptors_1.astype(np.float32)
             if descriptors_2.dtype != np.float32:
                 descriptors_2 = descriptors_2.astype(np.float32)
-        matches = self.matcher_obj.knnMatch(descriptors_1,descriptors_2,k=2)
+        matches = self.matcher_obj.knnMatch(descriptors_1,descriptors_2,k=k)
         return matches
     
     def filter_matches(self, matches):
@@ -95,13 +98,72 @@ class Stitcher:
                 good.append([match[0]])
         return good
     
+        # # Get transformation and 
+        # transformation_matrix, mask = cv2.estimateAffine2D(src_pts, dst_pts)
+        # warped_img1 = cv2.warpAffine(img1, transformation_matrix, 
+        #                             (img2.shape[1], img2.shape[0]))
+
+        # # Create base mask
+        # mask = np.zeros_like(warped_img1).astype(np.float64)
+        # mask[warped_img1 > 0] = 1
+
+        # # Create horizontal gradient
+        # for y in range(mask.shape[0]):
+        #     non_zero = np.where(mask[y, :, 0] > 0)[0]
+        #     if len(non_zero) > 0:
+        #         left_edge = non_zero[0]
+        #         right_edge = non_zero[-1]
+        #         # Feather left edge
+        #         for x in range(left_edge, min(left_edge + feather_pixels, mask.shape[1])):
+        #             alpha = (x - left_edge) / feather_pixels
+        #             mask[y, x] *= alpha
+        #         # Feather right edge
+        #         for x in range(max(0, right_edge - feather_pixels), right_edge + 1):
+        #             alpha = (right_edge - x) / feather_pixels
+        #             mask[y, x] *= alpha
+
+        # # Create vertical gradient
+        # for x in range(mask.shape[1]):
+        #     non_zero = np.where(mask[:, x, 0] > 0)[0]
+        #     if len(non_zero) > 0:
+        #         top_edge = non_zero[0]
+        #         bottom_edge = non_zero[-1]
+        #         # Feather top edge
+        #         for y in range(top_edge, min(top_edge + feather_pixels, mask.shape[0])):
+        #             alpha = (y - top_edge) / feather_pixels
+        #             mask[y, x] *= alpha
+        #         # Feather bottom edge
+        #         for y in range(max(0, bottom_edge - feather_pixels), bottom_edge + 1):
+        #             alpha = (bottom_edge - y) / feather_pixels
+        #             mask[y, x] *= alpha
+
+        # Blend images
+        # result = warped_img1 * mask + img2 * (1 - mask)
+        
+        # return result.astype(np.uint8), transformation_matrix
+
     def warp(self, current_image, reference_image, src_pts, dst_pts):
         if self.type == 0: # Affine 
+            # print(src_pts.shape)
+            # print(dst_pts.shape)
+            # src_pts = src_pts[:3]
+            # dst_pts = dst_pts[:3]
+            # print(src_pts.shape)
+            # print(dst_pts.shape)
             M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+            # M = cv2.getAffineTransform(src_pts, dst_pts)
             warped_image = cv2.warpAffine(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
+            # warped_image = self.warpImagesAffine(current_image, reference_image, M)
+            # transformation_matrix, mask = cv2.estimateAffine2D(src_pts, dst_pts)
         elif self.type == 1: # Perspective
             M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
             warped_image = cv2.warpPerspective(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
+        
+        start = time.time()
+        warped_image = seamless_gradient_merge(warped_image, reference_image)
+        end = time.time()
+        self.logger.debug(end-start)
+
         return warped_image, M
 
     def detectAndComputeFromCorners(self, image, corners):
@@ -167,6 +229,9 @@ class ArbitraryStitcher(Stitcher):
             for j in range(0, len(self.images)):
                 if j==i:
                     continue
+                if self.consecutive_range != None:
+                    if abs(i-j) > self.consecutive_range:
+                        continue
                 matches = self.get_matches(self.des[i], self.des[j], 2)                        
                 good_matches = self.filter_matches(matches)
                 if len(good_matches) >= self.min_match_count:
@@ -217,6 +282,7 @@ class ArbitraryStitcher(Stitcher):
                     new_image_height = reference_image.shape[0] + (2*image_shapes[k][0])
                     reference_image = getpaddedimg(new_image_height, new_image_width, reference_image.shape[1], reference_image.shape[0], reference_image)
                     current_image = getpaddedimg(new_image_height, new_image_width, image_shapes[k][1], image_shapes[k][0], self.images[k])
+                    # current_image = self.images[k].copy()
                     current_corners = get_corners_from_image(current_image)
 
                     start = time.time()
@@ -227,7 +293,7 @@ class ArbitraryStitcher(Stitcher):
                         except Exception as e:
                             self.logger.warning("Error in detecting keypoints from corners. Computing on whole image. Exception: ",str(e))
                             corners = None
-                    if corners == None or self.consecutive_range == None:
+                    if corners == None or self.consecutive_range == None or thisdes is None:
                         thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
                         refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
         
@@ -271,10 +337,11 @@ class ArbitraryStitcher(Stitcher):
                                 self.logger.warning("Error in getting corners. Exception:",str(e))
                                 corners = None
 
-                        start = time.time()
-                        reference_image = seamless_merge(warped_image, reference_image, self.ref_image_contrib)
-                        end = time.time()
-                        self.logger.debug("6", end-start)
+                        reference_image = warped_image
+                        # start = time.time()
+                        # # reference_image = seamless_merge(warped_image, reference_image, self.ref_image_contrib)
+                        # end = time.time()
+                        # self.logger.debug("6", end-start)
                                         
                         remove_indexes.append(k)
                         self.logger.debug( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good_matches), self.min_match_count) )
@@ -296,7 +363,7 @@ class ArbitraryStitcher(Stitcher):
                     break
 
             # reference_image = cv2.medianBlur(reference_image, 3)     # Removing pepper noise developed during bitwise OR
-            reference_image = selective_color_blur(reference_image, 50, 21)
+            # reference_image = selective_color_blur(reference_image, 50, 21)
             blended_collections.append(reference_image)
             if self.tqdm != False:
                 progress_bar.update(1)
@@ -309,9 +376,11 @@ class ArbitraryStitcher(Stitcher):
 
 
 class ConsecutiveStitcher(Stitcher):
-    def __init__(self, ref_image_contrib = 0.2, **kwargs):
+    def __init__(self, 
+                #  ref_image_contrib = 0.2
+                **kwargs):
         super().__init__(**kwargs)
-        self.ref_image_contrib = ref_image_contrib
+        # self.ref_image_contrib = ref_image_contrib
         self.refs = [None]
         self.corners = None
 
@@ -327,6 +396,7 @@ class ConsecutiveStitcher(Stitcher):
             new_image_height = reference_image.shape[0] + (2*image.shape[0])
             reference_image = getpaddedimg(new_image_height, new_image_width, reference_image.shape[1], reference_image.shape[0], reference_image)
             current_image = getpaddedimg(new_image_height, new_image_width, image.shape[1], image.shape[0], image)
+            # current_image = image.copy()
             current_corners = get_corners_from_image(current_image)
 
             if self.corners != None:
@@ -336,7 +406,7 @@ class ConsecutiveStitcher(Stitcher):
                 except Exception as e:
                     self.logger.warning("Error in detecting keypoints from corners. Computing on whole image. Exception: ",str(e))
                     self.corners = None
-            if self.corners == None:
+            if self.corners == None or thisdes is None:
                 thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
                 refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
 
@@ -359,8 +429,9 @@ class ConsecutiveStitcher(Stitcher):
                     self.logger.warning("Error in getting corners. Exception:",str(e))
                     self.corners = None
 
-                reference_image = seamless_merge(warped_image, reference_image, self.ref_image_contrib)
-                                
+                # reference_image = seamless_merge(warped_image, reference_image, self.ref_image_contrib)
+                reference_image = warped_image
+
                 self.logger.debug( "Blended. Matches - {}/{}".format(len(good_matches), self.min_match_count) )
 
             else:
