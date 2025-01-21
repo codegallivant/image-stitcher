@@ -134,7 +134,7 @@ def selective_color_blur(image, target_color, kernel_size):
     return blurred_image
 
 
-def getpaddedimg(new_image_height, new_image_width, old_image_width, old_image_height, img, channels = 3):
+def pad_image(new_image_height, new_image_width, old_image_width, old_image_height, img, channels = 3):
     color = (0,0,0)
     if channels == 1:
         result = np.full((new_image_height,new_image_width), color[0:1], dtype=np.uint8)
@@ -149,23 +149,18 @@ def getpaddedimg(new_image_height, new_image_width, old_image_width, old_image_h
     return result
 
 
+def get_padded_images(img, ref):
+    new_w = ref.shape[1] + (2*img.shape[1])
+    new_h = ref.shape[0] + (2*img.shape[0])
+    new_ref = pad_image(new_h, new_w, ref.shape[1], ref.shape[0], ref)
+    new_img = pad_image(new_h, new_w, img.shape[1], img.shape[0], img)
+    return new_img, new_ref
+
+
 def crop_image(im):
     corners = get_corners_from_image(im)
     im2 = get_roi_from_corners(im, corners[0], corners[1])
     return im2
-    # im = Image.fromarray(im)
-    # bg = Image.new(im.mode, im.size, (0,0,0))
-    # # bg = Image.new(im.mode, im.size, (255,255,255))
-    # diff = ImageChops.difference(im, bg)
-    # diff = ImageChops.add(diff, diff, 2.0, -100)
-    # bbox = diff.getbbox()
-    # result = im
-    # if bbox:
-    #     result = im.crop(bbox)
-    #     del im
-    # del bbox, bg, diff
-    # gc.collect()
-    # return np.array(result)
 
 
 def transform_keypoints_from_roi(keypoints_roi, roi_topleft):

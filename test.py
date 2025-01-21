@@ -33,7 +33,6 @@ with open("config.yaml", 'r') as ymlfile:
 
 if __name__ == "__main__":
 
-    INPUT_DIR = "/mnt/d/datasets/isdc_test_drone_datasets/d1"
     files = os.listdir(INPUT_DIR)
     files = [os.path.join(INPUT_DIR, file) for file in files]
 
@@ -41,16 +40,18 @@ if __name__ == "__main__":
 
     files = [p[1] for p in enumerate(files) if p[0]%1==0]
 
-    def sort_key(s, a):
-        p = os.path.basename(s)[:-4].split('_')
-        p = [x.split('.') for x in p]
-        pf = list()
-        for xs in p:
-            for x in xs:
-                pf.append(x)
-        return int(pf[a])
+    # def sort_key(s, a):
+    #     p = os.path.basename(s)[:-4].split('_')
+    #     p = [x.split('.') for x in p]
+    #     pf = list()
+    #     for xs in p:
+    #         for x in xs:
+    #             pf.append(x)
+    #     return int(pf[a])
 
-    filepaths = sorted(files, key=lambda x: (sort_key(x, 1), sort_key(x, 2), sort_key(x, 3)))[:INPUT_LIMIT]
+    # filepaths = sorted(files, key=lambda x: (sort_key(x, 1), sort_key(x, 2), sort_key(x, 3)))[:INPUT_LIMIT]
+
+    filepaths = sorted(files)
 
     kwargs = {
         "filepaths": filepaths,
@@ -80,7 +81,7 @@ if __name__ == "__main__":
         cons = ConsecutiveStitcher(**kwargs)
         start_time = time.time()
         for filepath in filepaths:
-            cons.stitch(load_image(filepath))
+            cons.stitch_consecutive(load_image(filepath))
         end_time = time.time()
         print("input image count:", len(filepaths))
         print("duration:", end_time - start_time)
@@ -88,9 +89,14 @@ if __name__ == "__main__":
         print("rate:", len(filepaths)/(end_time - start_time), "stitch/s")
         stitched = cons.refs
 
-    delfiles = glob.glob(f'{STITCH_DIR}/*')
-    for f in delfiles:
-        os.remove(f)
+    if not os.path.exists(STITCH_DIR):
+        os.makedirs(STITCH_DIR)
+    else:
+        delfiles = glob.glob(f'{STITCH_DIR}/*')
+        for f in delfiles:
+            os.remove(f)
+
     for i, stitch in enumerate(stitched):
         cv2.imwrite(os.path.join(STITCH_DIR, f"{i}.png"), stitch)
+    
     cv2.destroyAllWindows()

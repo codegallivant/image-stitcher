@@ -8,10 +8,22 @@ import gc
 import logging
 from utils.logger import LogWrapper
 from utils.structs import DynamicConnectivity, LazyList
-from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, getpaddedimg, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
+from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
 from utils.utils import tqdm, no_tqdm
 from scipy.ndimage import distance_transform_edt
 
+
+class TransformDetails:
+    def __init__(self, M, src_pts, dst_pts):
+        self.M = M
+        self.src_pts = src_pts
+        self.dst_pts = dst_pts
+
+    def get(self):
+        return self.M, self.src_pts, self.dst_pts
+
+    def __str__(self):
+        return f"M: {self.M}, src_pts: {self.src_pts}, dst_pts: {self.dst_pts}"
 
 
 class Stitcher:
@@ -24,6 +36,7 @@ class Stitcher:
                  matcher = 0,
                  type = 0,
                  resize = None,
+                 consecutive_range = None
                 #  ref_image_contrib = 0.5
                  ):
         
@@ -53,6 +66,7 @@ class Stitcher:
         # self.ref_image_contrib = ref_image_contrib
         self.type = type
         self.resize = resize
+        self.consecutive_range = consecutive_range
         self.matcher = matcher
         self.logger.info(f"Initialising {options_dict['matcher'][self.matcher].upper()} matcher")
         if self.matcher == 0:
@@ -98,85 +112,93 @@ class Stitcher:
                 good.append([match[0]])
         return good
     
-        # # Get transformation and 
-        # transformation_matrix, mask = cv2.estimateAffine2D(src_pts, dst_pts)
-        # warped_img1 = cv2.warpAffine(img1, transformation_matrix, 
-        #                             (img2.shape[1], img2.shape[0]))
+    def get_pts(self, src_kp, dst_kp, good_matches):
+        src_pts = np.float32([src_kp[m[0].queryIdx].pt for m in good_matches]).reshape(-1,1,2)
+        dst_pts = np.float32([dst_kp[m[0].trainIdx].pt for m in good_matches]).reshape(-1,1,2)
+        return src_pts, dst_pts
 
-        # # Create base mask
-        # mask = np.zeros_like(warped_img1).astype(np.float64)
-        # mask[warped_img1 > 0] = 1
-
-        # # Create horizontal gradient
-        # for y in range(mask.shape[0]):
-        #     non_zero = np.where(mask[y, :, 0] > 0)[0]
-        #     if len(non_zero) > 0:
-        #         left_edge = non_zero[0]
-        #         right_edge = non_zero[-1]
-        #         # Feather left edge
-        #         for x in range(left_edge, min(left_edge + feather_pixels, mask.shape[1])):
-        #             alpha = (x - left_edge) / feather_pixels
-        #             mask[y, x] *= alpha
-        #         # Feather right edge
-        #         for x in range(max(0, right_edge - feather_pixels), right_edge + 1):
-        #             alpha = (right_edge - x) / feather_pixels
-        #             mask[y, x] *= alpha
-
-        # # Create vertical gradient
-        # for x in range(mask.shape[1]):
-        #     non_zero = np.where(mask[:, x, 0] > 0)[0]
-        #     if len(non_zero) > 0:
-        #         top_edge = non_zero[0]
-        #         bottom_edge = non_zero[-1]
-        #         # Feather top edge
-        #         for y in range(top_edge, min(top_edge + feather_pixels, mask.shape[0])):
-        #             alpha = (y - top_edge) / feather_pixels
-        #             mask[y, x] *= alpha
-        #         # Feather bottom edge
-        #         for y in range(max(0, bottom_edge - feather_pixels), bottom_edge + 1):
-        #             alpha = (bottom_edge - y) / feather_pixels
-        #             mask[y, x] *= alpha
-
-        # Blend images
-        # result = warped_img1 * mask + img2 * (1 - mask)
-        
-        # return result.astype(np.uint8), transformation_matrix
-
-    def warp(self, current_image, reference_image, src_pts, dst_pts):
+    def get_transform(self, src_pts, dst_pts):
         if self.type == 0: # Affine 
-            # print(src_pts.shape)
-            # print(dst_pts.shape)
-            # src_pts = src_pts[:3]
-            # dst_pts = dst_pts[:3]
-            # print(src_pts.shape)
-            # print(dst_pts.shape)
             M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
-            # M = cv2.getAffineTransform(src_pts, dst_pts)
-            warped_image = cv2.warpAffine(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
-            # warped_image = self.warpImagesAffine(current_image, reference_image, M)
-            # transformation_matrix, mask = cv2.estimateAffine2D(src_pts, dst_pts)
         elif self.type == 1: # Perspective
             M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
-            warped_image = cv2.warpPerspective(current_image, M, (reference_image.shape[1], reference_image.shape[0]))
+        return M
+
+    def warp_and_merge(self, img, ref, M):
+        if self.type == 0: # Affine 
+            warped_image = cv2.warpAffine(img, M, (ref.shape[1], ref.shape[0]))
+        elif self.type == 1: # Perspective
+            warped_image = cv2.warpPerspective(img, M, (ref.shape[1], ref.shape[0]))
         
         start = time.time()
-        warped_image = seamless_gradient_merge(warped_image, reference_image)
+        warped_image = seamless_gradient_merge(warped_image, ref)
         end = time.time()
         self.logger.debug(end-start)
 
-        return warped_image, M
+        return warped_image
 
     def detectAndComputeFromCorners(self, image, corners):
         roi_img = get_roi_from_corners(image, corners[0], corners[1])
         keypoints_roi, thisdes = self.algorithm_obj.detectAndCompute(roi_img, None)
         thiskp = transform_keypoints_from_roi(keypoints_roi, corners[0])
         return thiskp, thisdes
+    
+    def stitch(self, arg_ref, arg_img, tf = None, corners = None):
+        current_image, reference_image = get_padded_images(arg_img, arg_ref)
+        current_corners = get_corners_from_image(current_image)
+
+        if tf is None:
+            # Obtain tf
+            if corners != None and self.consecutive_range != None:
+                try:
+                    thiskp, thisdes = self.detectAndComputeFromCorners(current_image, current_corners)
+                    refkp, refdes = self.detectAndComputeFromCorners(reference_image, corners)
+                except Exception as e:
+                    self.logger.warning("Error in detecting keypoints from corners. Computing on whole image. Exception: ",str(e))
+                    corners = None
+            if corners == None or self.consecutive_range == None or thisdes is None:
+                thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
+                refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
+
+            if refdes is None:
+                self.logger.warning(f"Key points not found in ref. Moving to next blend.")
+                return False # Not enough keypoints in ref
+            
+            matches = self.get_matches(thisdes, refdes, 2)
+
+            good_matches = self.filter_matches(matches)
+
+            if len(good_matches)>=self.min_match_count:
+                # matched_once = True
+                src_pts, dst_pts = self.get_pts(thiskp, refkp, good_matches)
+                M = self.get_transform(src_pts, dst_pts)
+                tf = TransformDetails(M, src_pts, dst_pts)
+            else:
+                self.logger.debug( "Cannot blend. Not enough matches found - {}/{}".format(len(good_matches), self.min_match_count) )
+                return None # Not enough matches
+        else:
+            M, src_pts, dst_pts = tf.get()
+
+        merged_image = self.warp_and_merge(current_image, reference_image, M)
+
+        if self.consecutive_range != None:
+            try:
+                corners = get_corners_from_image(merged_image)                
+            except Exception as e:
+                self.logger.warning("Error in getting corners. Exception:",str(e))
+                corners = None
+
+        reference_image = merged_image                            
+
+        reference_image = crop_image(reference_image) # Removing padding
+        
+        self.logger.debug( "Blended, enough matches - {}/{}".format(len(good_matches), self.min_match_count))
+        return reference_image, corners, tf
 
 
 class ArbitraryStitcher(Stitcher):
-    def __init__(self, images = None, filepaths = None, consecutive_range = None, with_tqdm = True, **kwargs):
+    def __init__(self, images = None, filepaths = None, with_tqdm = True, **kwargs):
         super().__init__(**kwargs)
-        self.consecutive_range = consecutive_range
 
         # Initialise images
         if images != None:
@@ -252,8 +274,6 @@ class ArbitraryStitcher(Stitcher):
         if self.tqdm != False:
             progress_bar = tqdm(total=len(self.images))
 
-        image_shapes = [image.shape for image in self.images]
-
         unblended_collections = copy.deepcopy(collections)
         blended_collections = list()
 
@@ -278,79 +298,19 @@ class ArbitraryStitcher(Stitcher):
                 remove_indexes = list()
                 corners = None
                 for k in unblended_image_indexes:
-                    new_image_width = reference_image.shape[1] + (2*image_shapes[k][1])
-                    new_image_height = reference_image.shape[0] + (2*image_shapes[k][0])
-                    reference_image = getpaddedimg(new_image_height, new_image_width, reference_image.shape[1], reference_image.shape[0], reference_image)
-                    current_image = getpaddedimg(new_image_height, new_image_width, image_shapes[k][1], image_shapes[k][0], self.images[k])
-                    # current_image = self.images[k].copy()
-                    current_corners = get_corners_from_image(current_image)
-
-                    start = time.time()
-                    if corners != None and self.consecutive_range != None:
-                        try:
-                            thiskp, thisdes = self.detectAndComputeFromCorners(current_image, current_corners)
-                            refkp, refdes = self.detectAndComputeFromCorners(reference_image, corners)
-                        except Exception as e:
-                            self.logger.warning("Error in detecting keypoints from corners. Computing on whole image. Exception: ",str(e))
-                            corners = None
-                    if corners == None or self.consecutive_range == None or thisdes is None:
-                        thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
-                        refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
-        
-                    end = time.time()
-                    self.logger.debug("0", end-start)
-
-                    if refdes is None:
-                        self.logger.warning(f"{i} {k} Key points not found in ref. Moving to next blend.")
+                    result = self.stitch(reference_image, self.images[k], corners = corners)
+                    if result is False:
                         unblended_collections.append(unblended_image_indexes[k:])
                         key_points_broken = True
-                        break
-                        
-                    # print(thisdes.dtype, refdes.dtype)
-                    # matches = bf.knnMatch(thisdes,refdes,k=2)
-                    start = time.time()
-                    matches = self.get_matches(thisdes, refdes, 2)
-                    end = time.time()
-                    self.logger.debug("1", end-start)
-
-                    start = time.time()
-                    good_matches = self.filter_matches(matches)
-                    end = time.time()
-                    self.logger.debug("2", end-start)
-
-                    if len(good_matches)>=self.min_match_count:
-                        matched_once = True
-                        start = time.time()
-                        src_pts = np.float32([thiskp[m[0].queryIdx].pt for m in good_matches]).reshape(-1,1,2)
-                        dst_pts = np.float32([refkp[m[0].trainIdx].pt for m in good_matches]).reshape(-1,1,2)
-                        end = time.time()
-                        self.logger.debug("3", end-start)
-                        start = time.time()
-                        warped_image, M = self.warp(current_image, reference_image, src_pts, dst_pts)
-                        end = time.time()
-                        self.logger.debug("4", end-start)
-
-                        if self.consecutive_range != None:
-                            try:
-                                corners = get_corners_from_image(warped_image)                
-                            except Exception as e:
-                                self.logger.warning("Error in getting corners. Exception:",str(e))
-                                corners = None
-
-                        reference_image = warped_image
-                        # start = time.time()
-                        # # reference_image = seamless_merge(warped_image, reference_image, self.ref_image_contrib)
-                        # end = time.time()
-                        # self.logger.debug("6", end-start)
-                                        
-                        remove_indexes.append(k)
-                        self.logger.debug( "Blend {}/{} ({}/{} blended): {}->ref blended, enough matches - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good_matches), self.min_match_count) )
-                        progress_bar.update(1)
-                    else:
-                        self.logger.debug( "Blend {}/{} ({}/{} blended): {}->ref, Not enough matches found - {}/{}".format(i+1,len(unblended_collections),len(unblended_image_group)-len(unblended_image_indexes)+len(remove_indexes),len(unblended_image_group),k,len(good_matches), self.min_match_count) )
                         corners = None
-
-                    reference_image = crop_image(reference_image) # Removing padding
+                        break
+                    elif result is None:
+                        corners = None
+                    else:
+                        reference_image, corners, tf = result
+                        matched_once = True
+                        remove_indexes.append(k)
+                        progress_bar.update(1)
 
                 for r in remove_indexes:
                     unblended_image_indexes.remove(r)            
@@ -383,8 +343,9 @@ class ConsecutiveStitcher(Stitcher):
         # self.ref_image_contrib = ref_image_contrib
         self.refs = [None]
         self.corners = None
+        self.consecutive_range = True
 
-    def stitch(self, input_image):
+    def stitch_consecutive(self, input_image, tf = None):
         self.logger.info("Stitching image")
         image = resize_image(input_image, self.resize)
         # print(self.refs)
@@ -392,58 +353,16 @@ class ConsecutiveStitcher(Stitcher):
             self.refs[-1] = image
         else:
             reference_image = self.refs[-1]
-            new_image_width = reference_image.shape[1] + (2*image.shape[1])
-            new_image_height = reference_image.shape[0] + (2*image.shape[0])
-            reference_image = getpaddedimg(new_image_height, new_image_width, reference_image.shape[1], reference_image.shape[0], reference_image)
-            current_image = getpaddedimg(new_image_height, new_image_width, image.shape[1], image.shape[0], image)
-            # current_image = image.copy()
-            current_corners = get_corners_from_image(current_image)
-
-            if self.corners != None:
-                try:
-                    thiskp, thisdes = self.detectAndComputeFromCorners(current_image, current_corners)
-                    refkp, refdes = self.detectAndComputeFromCorners(reference_image, self.corners)
-                except Exception as e:
-                    self.logger.warning("Error in detecting keypoints from corners. Computing on whole image. Exception: ",str(e))
-                    self.corners = None
-            if self.corners == None or thisdes is None:
-                thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
-                refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
-
-            if refdes is None:
-                self.logger.warning(f"Key points not found in ref. Moving to next blend.")
-                self.refs.append(image)
-                return None
-                
-            matches = self.get_matches(thisdes, refdes, 2)
-            good_matches = self.filter_matches(matches)
-            
-            if len(good_matches)>=self.min_match_count:
-                src_pts = np.float32([thiskp[m[0].queryIdx].pt for m in good_matches]).reshape(-1,1,2)
-                dst_pts = np.float32([refkp[m[0].trainIdx].pt for m in good_matches]).reshape(-1,1,2)
-                warped_image, M = self.warp(current_image, reference_image, src_pts, dst_pts)
-            
-                try:
-                    self.corners = get_corners_from_image(warped_image)                
-                except Exception as e:
-                    self.logger.warning("Error in getting corners. Exception:",str(e))
-                    self.corners = None
-
-                # reference_image = seamless_merge(warped_image, reference_image, self.ref_image_contrib)
-                reference_image = warped_image
-
-                self.logger.debug( "Blended. Matches - {}/{}".format(len(good_matches), self.min_match_count) )
-
-            else:
-                self.logger.debug( "Not enough matches: : {}/{}".format(len(good_matches), self.min_match_count) )
+            result = self.stitch(reference_image, image, corners = self.corners, tf=tf)
+            if result is False:
                 self.corners = None
-                M = None
-            
-            reference_image = crop_image(reference_image) # Removing padding
-            self.refs[-1] = reference_image
-            if M is None:
                 self.refs.append(image)
-
-            return M
-
+            elif result is None:
+                self.refs.append(image)
+                self.corners = None
+            else:
+                reference_image, corners, tf = result
+                self.corners = corners
+                self.refs[-1] = reference_image
+        return tf
 
