@@ -1,16 +1,22 @@
+import os
+import sys
 import numpy as np
 import cv2
-import os
 import copy
 import glob
 import time
 import gc
 import logging
-from utils.logger import LogWrapper
-from utils.structs import DynamicConnectivity, LazyList
-from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
-from utils.utils import tqdm, no_tqdm
 from scipy.ndimage import distance_transform_edt
+
+from .utils.logger import LogWrapper
+from .utils.structs import DynamicConnectivity, LazyList
+from .utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
+from .utils.utils import tqdm, no_tqdm
+# from utils.logger import LogWrapper
+# from utils.structs import DynamicConnectivity, LazyList
+# from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
+# from utils.utils import tqdm, no_tqdm
 
 
 class TransformDetails:
@@ -36,7 +42,9 @@ class Stitcher:
                  matcher = 0,
                  type = 0,
                  resize = None,
-                 consecutive_range = None
+                 consecutive_range = None,
+                 blend_processor = lambda x: x,
+                 backup_interval = False
                 #  ref_image_contrib = 0.5
                  ):
         
@@ -60,6 +68,8 @@ class Stitcher:
             self.logger.off()
 
         # Initialise parameters
+        self.backup_interval = backup_interval
+        self.blend_processor = blend_processor
         self.output_dir = output_dir
         self.min_match_count = min_match_count
         self.lowes_ratio_threshold = lowes_ratio_threshold
@@ -131,6 +141,7 @@ class Stitcher:
             warped_image = cv2.warpPerspective(img, M, (ref.shape[1], ref.shape[0]))
         
         start = time.time()
+        # warped_image = seamless_merge(warped_image, ref, ref_image_contrib=0.5)
         warped_image = seamless_gradient_merge(warped_image, ref)
         end = time.time()
         self.logger.debug(end-start)
@@ -143,10 +154,20 @@ class Stitcher:
         thiskp = transform_keypoints_from_roi(keypoints_roi, corners[0])
         return thiskp, thisdes
     
+    def save_last_stitch(self, stitch, filename):
+        processed_stitch = self.blend_processor(stitch)
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        filepath = os.path.join(self.output_dir, filename)
+        cv2.imwrite(filepath, processed_stitch)
+        self.logger.info(f"Saved last stitch to {filepath}")
+
     def stitch(self, arg_ref, arg_img, tf = None, corners = None):
         current_image, reference_image = get_padded_images(arg_img, arg_ref)
         current_corners = get_corners_from_image(current_image)
-
+        if current_corners is False:          
+            self.logger.warning("Could not get image corners. The input image has no non-black regions.")
+            corners = None
         if tf is None:
             # Obtain tf
             if corners != None and self.consecutive_range != None:
@@ -170,6 +191,7 @@ class Stitcher:
 
             if len(good_matches)>=self.min_match_count:
                 # matched_once = True
+                self.logger.debug( "Enough matches - {}/{}".format(len(good_matches), self.min_match_count))
                 src_pts, dst_pts = self.get_pts(thiskp, refkp, good_matches)
                 M = self.get_transform(src_pts, dst_pts)
                 tf = TransformDetails(M, src_pts, dst_pts)
@@ -179,20 +201,18 @@ class Stitcher:
         else:
             M, src_pts, dst_pts = tf.get()
 
-        merged_image = self.warp_and_merge(current_image, reference_image, M)
+        reference_image = self.warp_and_merge(current_image, reference_image, M)
 
         if self.consecutive_range != None:
-            try:
-                corners = get_corners_from_image(merged_image)                
-            except Exception as e:
-                self.logger.warning("Error in getting corners. Exception:",str(e))
+            corners = get_corners_from_image(reference_image)                            
+            if corners is False:          
+                self.logger.warning("Could not get image corners. The merged image has no non-black regions.")
                 corners = None
 
-        reference_image = merged_image                            
-
         reference_image = crop_image(reference_image) # Removing padding
-        
-        self.logger.debug( "Blended, enough matches - {}/{}".format(len(good_matches), self.min_match_count))
+        if reference_image is False:
+            return None
+
         return reference_image, corners, tf
 
 
@@ -324,7 +344,10 @@ class ArbitraryStitcher(Stitcher):
 
             # reference_image = cv2.medianBlur(reference_image, 3)     # Removing pepper noise developed during bitwise OR
             # reference_image = selective_color_blur(reference_image, 50, 21)
-            blended_collections.append(reference_image)
+            
+            # blended_collections.append(reference_image)
+            self.save_last_stitch(reference_image, f"blend_{i}.png")
+
             if self.tqdm != False:
                 progress_bar.update(1)
             i+=1
@@ -341,28 +364,34 @@ class ConsecutiveStitcher(Stitcher):
                 **kwargs):
         super().__init__(**kwargs)
         # self.ref_image_contrib = ref_image_contrib
-        self.refs = [None]
+        self.stitch_count = 0
+        self.ref = None
         self.corners = None
         self.consecutive_range = True
+
+    def save_last_stitch(self):
+        return super().save_last_stitch(self.ref, f"blend_{self.stitch_count}.png")
+    
+    def save_and_reset(self):
+        self.save_last_stitch()
+        self.ref = None
+        self.stitch_count += 1
+        # self.refs.append(image)
+        self.corners = None
 
     def stitch_consecutive(self, input_image, tf = None):
         self.logger.info("Stitching image")
         image = resize_image(input_image, self.resize)
         # print(self.refs)
-        if self.refs[-1] is None:
-            self.refs[-1] = image
+        if self.ref is None:
+            self.ref = image
         else:
-            reference_image = self.refs[-1]
-            result = self.stitch(reference_image, image, corners = self.corners, tf=tf)
-            if result is False:
-                self.corners = None
-                self.refs.append(image)
-            elif result is None:
-                self.refs.append(image)
-                self.corners = None
+            result = self.stitch(self.ref, image, corners = self.corners, tf=tf)
+            if result in [False, None]:
+                self.save_and_reset()
             else:
                 reference_image, corners, tf = result
                 self.corners = corners
-                self.refs[-1] = reference_image
+                self.ref = reference_image
         return tf
 
