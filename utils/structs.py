@@ -53,3 +53,37 @@ class DynamicConnectivity:
                 component_map[root].append(i)
         components = list(component_map.values())
         return components
+
+
+class ConstantLengthList:
+    def __init__(self, max_length):
+        self.index = 0
+        self.list = list()
+        self.max_length = max_length
+
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        if self.index < len(self.list):
+            self.index += 1
+            return self.list[self.index - 1]
+        else:
+            raise StopIteration
+    
+    def __getitem__(self, index):
+        return self.list[index]
+    
+    def __setitem__(self, index, value):
+        self.list[index] = value
+    
+    def __len__(self):
+        return len(self.list)
+
+    def append(self, item):
+        self.list.append(item)
+        if len(self.list) > self.max_length:
+            self.list.pop(0)
+    
+    def pop(self):
+        return self.list.pop()

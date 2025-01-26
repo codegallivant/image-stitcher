@@ -10,11 +10,12 @@ import logging
 from scipy.ndimage import distance_transform_edt
 
 from .utils.logger import LogWrapper
-from .utils.structs import DynamicConnectivity, LazyList
+from .utils.structs import DynamicConnectivity, LazyList, ConstantLengthList
 from .utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
 from .utils.utils import tqdm, no_tqdm
+
 # from utils.logger import LogWrapper
-# from utils.structs import DynamicConnectivity, LazyList
+# from utils.structs import DynamicConnectivity, LazyList, ConstantLengthList
 # from utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
 # from utils.utils import tqdm, no_tqdm
 
@@ -44,14 +45,15 @@ class Stitcher:
                  resize = None,
                  consecutive_range = None,
                  blend_processor = lambda x: x,
-                 backup_interval = False
-                #  ref_image_contrib = 0.5
+                 blender = 1,
+                 ref_image_contrib = 0.5 # Used in alpha blending
                  ):
         
         options_dict = {
             "log_level": [logging.DEBUG, logging.INFO, logging.WARNING],
             "algorithm": ["sift", "orb", "akaze"],
             "matcher": ["bf", "flann"],
+            "blender": ["alpha", "gradient"],
             "type": ["affine", "perspective"]
         }
 
@@ -68,12 +70,11 @@ class Stitcher:
             self.logger.off()
 
         # Initialise parameters
-        self.backup_interval = backup_interval
         self.blend_processor = blend_processor
         self.output_dir = output_dir
         self.min_match_count = min_match_count
         self.lowes_ratio_threshold = lowes_ratio_threshold
-        # self.ref_image_contrib = ref_image_contrib
+        self.ref_image_contrib = ref_image_contrib
         self.type = type
         self.resize = resize
         self.consecutive_range = consecutive_range
@@ -97,8 +98,9 @@ class Stitcher:
         elif self.algorithm == 2:
             # AKAZE
             self.algorithm_obj = cv2.AKAZE_create()
-
         self.logger.info(f"Using {options_dict['type'][self.type].upper()} type stitching")
+        self.blender = blender
+        self.logger.info(f"Using {options_dict['blender'][self.blender].upper()} blender")
 
 
     def get_matches(self, descriptors_1, descriptors_2, k = 2):
@@ -141,8 +143,10 @@ class Stitcher:
             warped_image = cv2.warpPerspective(img, M, (ref.shape[1], ref.shape[0]))
         
         start = time.time()
-        # warped_image = seamless_merge(warped_image, ref, ref_image_contrib=0.5)
-        warped_image = seamless_gradient_merge(warped_image, ref)
+        if self.blender == 0:
+            warped_image = seamless_merge(warped_image, ref, self.ref_image_contrib)
+        elif self.blender == 1:
+            warped_image = seamless_gradient_merge(warped_image, ref)
         end = time.time()
         self.logger.debug(end-start)
 
@@ -360,38 +364,62 @@ class ArbitraryStitcher(Stitcher):
 
 class ConsecutiveStitcher(Stitcher):
     def __init__(self, 
-                #  ref_image_contrib = 0.2
+                 ref_image_contrib = 0.2,
+                consecutive_range = 1,
+                backup_interval = False,
+                consecutive_volatility_threshold = 4,
                 **kwargs):
         super().__init__(**kwargs)
-        # self.ref_image_contrib = ref_image_contrib
+        self.consecutive_volatility_threshold = consecutive_volatility_threshold
+        self.ref_image_contrib = ref_image_contrib
         self.stitch_count = 0
-        self.ref = None
+        self.consecutive_range = consecutive_range
+        self.refs = ConstantLengthList(self.consecutive_range)
+        self.refs.append(None)
         self.corners = None
-        self.consecutive_range = True
+        self.image_count = 0
+        self.current_image_count = 0
+        self.backup_interval = backup_interval
 
     def save_last_stitch(self):
-        return super().save_last_stitch(self.ref, f"blend_{self.stitch_count}.png")
+        return super().save_last_stitch(self.refs[-1], f"blend_{self.stitch_count}.png")
     
     def save_and_reset(self):
         self.save_last_stitch()
-        self.ref = None
+        self.refs.append(None)
         self.stitch_count += 1
-        # self.refs.append(image)
         self.corners = None
+        self.current_image_count = 0
+
+    def finalise_current_image(self, result):
+        self.refs[-1], self.corners, tf = result
+        self.image_count+=1
+        self.current_image_count+=1
+        if self.backup_interval != False:
+            if self.image_count%self.backup_interval == 0:
+                self.save_last_stitch()
+        return tf
 
     def stitch_consecutive(self, input_image, tf = None):
-        self.logger.info("Stitching image")
+        self.logger.info(f"Stitch {self.stitch_count + 1}: Stitching image {self.image_count}")
         image = resize_image(input_image, self.resize)
         # print(self.refs)
-        if self.ref is None:
-            self.ref = image
+        if self.refs[-1] is None:
+            self.refs[-1] = image
         else:
-            result = self.stitch(self.ref, image, corners = self.corners, tf=tf)
+            result = self.stitch(self.refs[-1], image, corners = self.corners, tf=tf)
             if result in [False, None]:
-                self.save_and_reset()
+                if self.current_image_count < self.consecutive_volatility_threshold:
+                    for exref in reversed(self.refs[:-1]):
+                        result = self.stitch(exref, image, corners = self.corners, tf=tf)   
+                        if result not in [False, None]:
+                            tf = self.finalise_current_image(result)
+                            return tf
+                self.save_and_reset() 
             else:
-                reference_image, corners, tf = result
-                self.corners = corners
-                self.ref = reference_image
+                tf = self.finalise_current_image(result)
+                return tf
+                
+
         return tf
 
