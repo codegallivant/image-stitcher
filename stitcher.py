@@ -101,13 +101,9 @@ class Stitcher:
         self.logger.info(f"Using {options_dict['type'][self.type].upper()} type stitching")
         self.blender = blender
         self.logger.info(f"Using {options_dict['blender'][self.blender].upper()} blender")
-        self.timer = lambda x: timer(x, self.logger.debug)
-        for attr_name, attr_value in self.__dict__.items():
-            # Skip non-methods and special methods
-            if not callable(attr_value) or attr_name.startswith('__'):
-                continue    
-            setattr(self, attr_name, self.timer(attr_value))
 
+
+    @timer
     def get_matches(self, descriptors_1, descriptors_2, k = 2):
         if descriptors_1 is None or descriptors_2 is None:
             return list()
@@ -119,6 +115,7 @@ class Stitcher:
         matches = self.matcher_obj.knnMatch(descriptors_1,descriptors_2,k=k)
         return matches
     
+    @timer
     def filter_matches(self, matches):
         good = list()
         for match in matches:
@@ -129,11 +126,13 @@ class Stitcher:
                 good.append([match[0]])
         return good
     
+    @timer
     def get_pts(self, src_kp, dst_kp, good_matches):
         src_pts = np.float32([src_kp[m[0].queryIdx].pt for m in good_matches]).reshape(-1,1,2)
         dst_pts = np.float32([dst_kp[m[0].trainIdx].pt for m in good_matches]).reshape(-1,1,2)
         return src_pts, dst_pts
 
+    @timer
     def get_transform(self, src_pts, dst_pts):
         if self.type == 0: # Affine 
             M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
@@ -141,6 +140,7 @@ class Stitcher:
             M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
         return M
 
+    @timer
     def warp_and_merge(self, img, ref, M):
         if self.type == 0: # Affine 
             warped_image = cv2.warpAffine(img, M, (ref.shape[1], ref.shape[0]))
@@ -157,12 +157,15 @@ class Stitcher:
 
         return warped_image
 
+    @timer
     def detectAndComputeFromCorners(self, image, corners):
         roi_img = get_roi_from_corners(image, corners[0], corners[1])
+        self.logger.debug(roi_img.shape)
         keypoints_roi, thisdes = self.algorithm_obj.detectAndCompute(roi_img, None)
         thiskp = transform_keypoints_from_roi(keypoints_roi, corners[0])
         return thiskp, thisdes
     
+    @timer
     def save_last_stitch(self, stitch, filename):
         processed_stitch = self.blend_processor(stitch)
         if not os.path.exists(self.output_dir):
@@ -171,6 +174,7 @@ class Stitcher:
         cv2.imwrite(filepath, processed_stitch)
         self.logger.info(f"Saved last stitch to {filepath}")
 
+    @timer
     def stitch(self, arg_ref, arg_img, tf = None, corners = None):
         current_image, reference_image = get_padded_images(arg_img, arg_ref)
         current_corners = get_corners_from_image(current_image)
@@ -250,6 +254,7 @@ class ArbitraryStitcher(Stitcher):
         else:
             self.tqdm = with_tqdm
 
+    @timer
     def update_all_keypoints_and_descriptors(self):
         kp = list()
         des = list()
@@ -272,6 +277,7 @@ class ArbitraryStitcher(Stitcher):
         self.kp = kp
         self.des = des
 
+    @timer
     def get_collections(self):
         self.logger.info("Calculating collections")
         connections = DynamicConnectivity(len(self.images))
@@ -297,6 +303,7 @@ class ArbitraryStitcher(Stitcher):
         self.connections = connections
         return collections
 
+    @timer
     def stitch_collections(self, collections):
         self.logger.info("Stitching images")
 
@@ -386,6 +393,7 @@ class ConsecutiveStitcher(Stitcher):
         self.current_image_count = 0
         self.backup_interval = backup_interval
 
+
     def save_last_stitch(self):
         return super().save_last_stitch(self.refs[-1], f"blend_{self.stitch_count}.png")
     
@@ -405,6 +413,7 @@ class ConsecutiveStitcher(Stitcher):
                 self.save_last_stitch()
         return tf
 
+    @timer
     def stitch_consecutive(self, input_image, tf = None):
         self.logger.info(f"Stitch {self.stitch_count + 1}: Stitching image {self.image_count}")
         image = resize_image(input_image, self.resize)
