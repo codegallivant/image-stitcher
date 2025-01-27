@@ -7,12 +7,12 @@ import glob
 import time
 import gc
 import logging
-from scipy.ndimage import distance_transform_edt
+import functools
 
 from .utils.logger import LogWrapper
 from .utils.structs import DynamicConnectivity, LazyList, ConstantLengthList
 from .utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
-from .utils.utils import tqdm, no_tqdm
+from .utils.utils import tqdm, no_tqdm, timer
 
 # from utils.logger import LogWrapper
 # from utils.structs import DynamicConnectivity, LazyList, ConstantLengthList
@@ -101,7 +101,12 @@ class Stitcher:
         self.logger.info(f"Using {options_dict['type'][self.type].upper()} type stitching")
         self.blender = blender
         self.logger.info(f"Using {options_dict['blender'][self.blender].upper()} blender")
-
+        self.timer = lambda x: timer(x, self.logger.debug)
+        for attr_name, attr_value in self.__dict__.items():
+            # Skip non-methods and special methods
+            if not callable(attr_value) or attr_name.startswith('__'):
+                continue    
+            setattr(self, attr_name, self.timer(attr_value))
 
     def get_matches(self, descriptors_1, descriptors_2, k = 2):
         if descriptors_1 is None or descriptors_2 is None:
@@ -413,6 +418,7 @@ class ConsecutiveStitcher(Stitcher):
                     for exref in reversed(self.refs[:-1]):
                         result = self.stitch(exref, image, corners = self.corners, tf=tf)   
                         if result not in [False, None]:
+                            self.refs.pop()
                             tf = self.finalise_current_image(result)
                             return tf
                 self.save_and_reset() 
