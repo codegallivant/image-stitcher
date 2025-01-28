@@ -141,21 +141,20 @@ class Stitcher:
         return M
 
     @timer
-    def warp_and_merge(self, img, ref, M):
+    def warp_target(self, img, ref, M):
         if self.type == 0: # Affine 
             warped_image = cv2.warpAffine(img, M, (ref.shape[1], ref.shape[0]))
         elif self.type == 1: # Perspective
             warped_image = cv2.warpPerspective(img, M, (ref.shape[1], ref.shape[0]))
-        
-        start = time.time()
-        if self.blender == 0:
-            warped_image = seamless_merge(warped_image, ref, self.ref_image_contrib)
-        elif self.blender == 1:
-            warped_image = seamless_gradient_merge(warped_image, ref)
-        end = time.time()
-        self.logger.debug(end-start)
-
         return warped_image
+
+    @timer
+    def merge(self, warped_image, ref):
+        if self.blender == 0:
+            merged_image = seamless_merge(warped_image, ref, self.ref_image_contrib)
+        elif self.blender == 1:
+            merged_image = seamless_gradient_merge(warped_image, ref)
+        return merged_image
 
     @timer
     def detectAndComputeFromCorners(self, image, corners):
@@ -214,10 +213,11 @@ class Stitcher:
         else:
             M, src_pts, dst_pts = tf.get()
 
-        reference_image = self.warp_and_merge(current_image, reference_image, M)
+        warped_image = self.warp_target(current_image, reference_image, M)
+        reference_image = self.merge(warped_image, reference_image)
 
         if self.consecutive_range != None:
-            corners = get_corners_from_image(reference_image)                            
+            corners = get_corners_from_image(warped_image)                           
             if corners is False:          
                 self.logger.warning("Could not get image corners. The merged image has no non-black regions.")
                 corners = None
