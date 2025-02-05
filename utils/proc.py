@@ -27,7 +27,7 @@ def resize_image(image, to_resize = None):
 
 def load_image(filepath, to_resize = None):
     image = cv2.imread(filepath)
-    image = image[:,65:]   
+    # image = image[:,65:]   
     return resize_image(image, to_resize) 
 
 
