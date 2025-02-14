@@ -1,8 +1,11 @@
 venv/
 __pycache__/
 
+dist/
+build/
+image_stitcher.egg-info/
 
-stitched/
-stitches/
+tests/stitched/
+tests/stitches/
 *.out
 *.zip

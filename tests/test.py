@@ -1,10 +1,10 @@
 import logging
 import yaml
 import time
-from stitcher import ArbitraryStitcher, ConsecutiveStitcher
+from image_stitcher.stitcher import ArbitraryStitcher, ConsecutiveStitcher
 import os
 import cv2
-from utils.proc import load_image
+from image_stitcher.utils.proc import load_image
 import glob
 
 
@@ -12,7 +12,6 @@ import glob
 logging.info("Reading configuration file")
 with open("config.yaml", 'r') as ymlfile:
     cfg = yaml.safe_load(ymlfile)
-    PROJECT_DIR = cfg["project_dir"]
     INPUT_DIR = cfg["input_dir"]
     STITCH_DIR = cfg["stitch_dir"]
     MIN_MATCH_COUNT = cfg["min_match_threshold"]
@@ -63,6 +62,7 @@ if __name__ == "__main__":
         "resize": RESIZE, 
         "log_level": LOGLEVEL,
         "consecutive_range": CONSECUTIVE_RANGE,
+        "output_dir": STITCH_DIR
         # "ref_image_contrib": REF_IMAGE_CONTRIB
     }
 
@@ -87,16 +87,5 @@ if __name__ == "__main__":
         print("duration:", end_time - start_time)
         print("rate:", (end_time - start_time)/len(filepaths), "s/stitch")
         print("rate:", len(filepaths)/(end_time - start_time), "stitch/s")
-        stitched = cons.refs
 
-    if not os.path.exists(STITCH_DIR):
-        os.makedirs(STITCH_DIR)
-    else:
-        delfiles = glob.glob(f'{STITCH_DIR}/*')
-        for f in delfiles:
-            os.remove(f)
-
-    for i, stitch in enumerate(stitched):
-        cv2.imwrite(os.path.join(STITCH_DIR, f"{i}.png"), stitch)
-    
     cv2.destroyAllWindows()

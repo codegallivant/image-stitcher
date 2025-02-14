@@ -1,7 +1,6 @@
-project_dir: "/mnt/d/image-stitcher/"
 input_dir: "/mnt/d/datasets/isdc_test_drone_datasets/d1"
-stitch_dir: /mnt/d/isdc-stitcher/image-stitcher/stitched/stitched30
-input_limit: 200 # Set to null if all input images should be considered
+stitch_dir: "stitches"
+input_limit: 60 # Set to null if all input images should be considered
 
 resize: null # Set to null for no resizing
 algorithm: 1 # 0: SIFT, 1: ORB, 2: AKAZE
@@ -12,7 +11,7 @@ min_match_threshold: 5
 lowes_ratio: 0.65
 # ref_image_contrib: null # Set to null for default
 
-arbitrary: false
+arbitrary: true
 consecutive_range: 2 # Set to null if all should be checked
 
 loglevel: 2 # 0: Nothing 1: DEBUG, 2: INFO, 3: WARNING
