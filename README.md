@@ -2,7 +2,7 @@
 
 Python library for general mass image stitching.
 
-| Package | [![PyPI Latest Release](https://img.shields.io/pypi/v/image-stitcher.svg)](https://pypi.org/project/image-stitcher/)
+[![PyPI Latest Release](https://img.shields.io/pypi/v/image-stitcher.svg)](https://pypi.org/project/image-stitcher/)
 
 ## Setup
 ```bash
