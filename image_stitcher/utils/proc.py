@@ -254,6 +254,73 @@ def seamless_gradient_merge(warped_img1, img2, feather_pixels = 10):
     return img2
 
 
+# def multiband_merge(warped_img1, img2, img2_corners = None):
+#     img_mask = (np.any(warped_img1 > 5, axis=-1)).astype(np.uint8) * 255
+#     # img_mask = np.zeros_like(warped_img1).astype(np.float64)
+    
+#     compensator = cv2.detail.ExposureCompensator_createDefault(cv2.detail.ExposureCompensator_GAIN_BLOCKS)
+    
+#     img_corners = get_corners_from_image(warped_img1)
+#     if img2_corners is None:
+#         img2_corners = get_corners_from_image(img2)
+
+#     x1,x2,y1,y2 = get_roi_from_corners(img2, img2_corners[0], img2_corners[1], img = False)
+#     # img2_mask = np.zeros((img2.shape[0], img2.shape[1])).astype(np.uint8)
+#     # img2_mask[x1:x2, y1:y2] = 255
+#     img2_mask = (np.any(img2 > 5, axis=-1)).astype(np.uint8) * 255
+
+
+#     corners = [(0,0), (0,0)]
+#     images = [warped_img1, img2] 
+#     masks = [img_mask, img2_mask]
+    
+#     compensator.feed(corners, images, masks)
+#     compensator.apply(0, corners[0], warped_img1, img_mask)
+#     compensator.apply(1, corners[1], img2, img2_mask)
+
+#     seam_finder = cv2.detail.SeamFinder_createDefault(cv2.detail.SeamFinder_VORONOI_SEAM)
+#     seam_finder.find(images, corners, masks)
+
+#     blender = cv2.detail_MultiBandBlender(0, 3)  # try_use_gpu=0 (False), num_bands=5
+#     blender.prepare((0, 0, img2.shape[1], img2.shape[0]))
+#     blender.feed(warped_img1, img_mask, corners[0])
+#     blender.feed(img2, img2_mask, corners[1])
+#     result = None
+#     result_mask = None
+#     result, result_mask = blender.blend(result, result_mask)
+#     result = cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+#     return result
+
+def multiband_merge(warped_img1, img2, img2_corners=None):
+    img_mask1 = ((np.any(warped_img1 > 5, axis=-1)).astype(np.uint8) * 255)
+    img_mask2 = ((np.any(img2 > 5, axis=-1)).astype(np.uint8) * 255)
+
+    img_mask1 = cv2.GaussianBlur(img_mask1, (5,5), 0)
+    img_mask2 = cv2.GaussianBlur(img_mask2, (5,5), 0)
+
+    compensator = cv2.detail.ExposureCompensator_createDefault(cv2.detail.ExposureCompensator_GAIN)
+
+    corners = [(0, 0), (0, 0)]
+    images = [warped_img1.astype(np.uint8), img2.astype(np.uint8)]
+    masks = [img_mask1, img_mask2]
+
+    compensator.feed(corners, images, masks)
+    compensator.apply(0, corners[0], images[0], masks[0])
+    compensator.apply(1, corners[1], images[1], masks[1])
+
+    seam_finder = cv2.detail.SeamFinder_createDefault(cv2.detail.SeamFinder_VORONOI_SEAM)
+    seam_finder.find(images, corners, masks)
+
+    blender = cv2.detail_MultiBandBlender(0, 3)
+    blender.prepare((0, 0, img2.shape[1], img2.shape[0]))
+
+    for img, mask, corner in zip(images, masks, corners):
+        blender.feed(img, mask, corner)
+
+    result, result_mask = blender.blend(None, None)
+    result = np.clip(result, 0, 255).astype(np.uint8)
+    return result
+
 
 def seamless_merge_into_roi(image1, image2, roi_coords, ref_image_contrib):
     image2_roi = get_roi_from_corners(image2, roi_coords[0], roi_coords[1])

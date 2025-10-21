@@ -11,7 +11,7 @@ import functools
 
 from .utils.logger import LogWrapper
 from .utils.structs import DynamicConnectivity, LazyList, ConstantLengthList
-from .utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge
+from .utils.proc import load_image, get_corners_from_image, transform_keypoints_from_roi, get_padded_images, seamless_merge, crop_image, selective_color_blur, get_roi_from_corners, resize_image, seamless_merge_into_roi, seamless_gradient_merge, multiband_merge
 from .utils.utils import tqdm, no_tqdm, timer
 
 # from utils.logger import LogWrapper
@@ -53,7 +53,7 @@ class Stitcher:
             "log_level": [logging.DEBUG, logging.INFO, logging.WARNING],
             "algorithm": ["sift", "orb", "akaze"],
             "matcher": ["bf", "flann"],
-            "blender": ["alpha", "gradient"],
+            "blender": ["alpha", "gradient", "multiband"],
             "type": ["affine", "perspective"]
         }
 
@@ -149,11 +149,13 @@ class Stitcher:
         return warped_image
 
     @timer
-    def merge(self, warped_image, ref):
+    def merge(self, warped_image, ref, corners = None):
         if self.blender == 0:
             merged_image = seamless_merge(warped_image, ref, self.ref_image_contrib)
         elif self.blender == 1:
             merged_image = seamless_gradient_merge(warped_image, ref)
+        elif self.blender == 2:
+            merged_image = multiband_merge(warped_image, ref, corners)
         return merged_image
 
     @timer
@@ -177,21 +179,34 @@ class Stitcher:
     def stitch(self, arg_ref, arg_img, tf = None, corners = None):
         current_image, reference_image = get_padded_images(arg_img, arg_ref)
         current_corners = get_corners_from_image(current_image)
+        cv2.imwrite("test.png", current_image)
+        # print(current_corners)
         if current_corners is False:          
             self.logger.warning("Could not get image corners. The input image has no non-black regions.")
             corners = None
+        # else:
+        #     if not (corners is False):
+        #         corners = current_corners 
         if tf is None:
             # Obtain tf
             if corners != None and self.consecutive_range != None:
                 try:
+                    # print("here1")
                     thiskp, thisdes = self.detectAndComputeFromCorners(current_image, current_corners)
                     refkp, refdes = self.detectAndComputeFromCorners(reference_image, corners)
+                    # print("here2")
                 except Exception as e:
                     self.logger.warning("Error in detecting keypoints from corners. Computing on whole image. Exception: ",str(e))
                     corners = None
             if corners == None or self.consecutive_range == None or thisdes is None:
-                thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
-                refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
+                # print("here3")
+                # print(current_image.shape)
+                # print(reference_image.shape)
+                thiskp, thisdes = self.detectAndComputeFromCorners(current_image, current_corners)
+                refkp, refdes = self.detectAndComputeFromCorners(reference_image, get_corners_from_image(reference_image))      
+                # thiskp, thisdes = self.algorithm_obj.detectAndCompute(current_image, None)
+                # refkp, refdes = self.algorithm_obj.detectAndCompute(reference_image, None)
+                # print("here4")
 
             if refdes is None:
                 self.logger.warning(f"Key points not found in ref. Moving to next blend.")
@@ -395,8 +410,9 @@ class ConsecutiveStitcher(Stitcher):
 
 
     def save_last_stitch(self):
-        return super().save_last_stitch(self.refs[-1], f"blend_{self.stitch_count}.png")
-    
+        if not (self.refs[-1] is None):
+            super().save_last_stitch(self.refs[-1], f"blend_{self.stitch_count}.png")
+        
     def save_and_reset(self):
         self.save_last_stitch()
         self.refs.append(None)
@@ -430,6 +446,7 @@ class ConsecutiveStitcher(Stitcher):
                             self.refs.pop()
                             tf = self.finalise_current_image(result)
                             return tf
+                self.logger.debug("Saving and resetting stitch..")
                 self.save_and_reset() 
             else:
                 tf = self.finalise_current_image(result)
